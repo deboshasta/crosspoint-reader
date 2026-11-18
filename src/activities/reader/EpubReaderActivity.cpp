@@ -453,9 +453,9 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   startClipSelection(-1, -1, ClipSelectionActivity::Mode::Lookup);
 }
 
-void EpubReaderActivity::startClipSelection(const int initialX, const int initialY,
+bool EpubReaderActivity::startClipSelection(const int initialX, const int initialY,
                                             const ClipSelectionActivity::Mode mode) {
-  if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return;
+  if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return false;
 
   const int pageNumber = section->currentPage;
   const uint16_t pageCount = section->pageCount;
@@ -476,7 +476,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
         showClippingMessage = true;
         clippingMessageTime = millis();
         requestUpdate();
-        return;
+        return false;
       }
     }
     pages.push_back(std::move(page));
@@ -484,13 +484,13 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
   if (pages.empty()) {
     LOG_ERR("CLIP", "Failed to load page %d for clipping selection", pageNumber);
     requestUpdate();
-    return;
+    return false;
   }
 
   if (buildViewportWidth == 0 || buildViewportHeight == 0) {
     LOG_ERR("CLIP", "Cannot anchor clipping before the reader viewport is initialized");
     requestUpdate();
-    return;
+    return false;
   }
   const uint32_t layoutSignature =
       readerRenderSpecSignature(SETTINGS.readerRenderSpec(buildViewportWidth, buildViewportHeight));
@@ -511,12 +511,15 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
   if (!activity) {
     LOG_ERR("CLIP", "Failed to allocate clipping selection activity");
     requestUpdate();
-    return;
+    return false;
   }
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
                                                bookTitle = std::move(bookTitle), author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
     if (result.isCancelled) {
+      // A cancelled selection may still hold the long-press contact handed to
+      // it; drop it so the finger lift cannot also tap the resumed page.
+      mappedInput.suppressScreenTouchContact();
       requestUpdate();
       return;
     }
@@ -573,6 +576,7 @@ void EpubReaderActivity::startClipSelection(const int initialX, const int initia
     clippingMessageTime = millis();
     requestUpdate();
   });
+  return true;
 }
 
 void EpubReaderActivity::openFootnoteSelect(const bool reopenMenuOnCancel) {
@@ -769,10 +773,13 @@ void EpubReaderActivity::loop() {
 
   int selectionX = 0;
   int selectionY = 0;
-  if (!atEndOfBook && SETTINGS.touchReaderControls && mappedInput.wasScreenLongPress(selectionX, selectionY)) {
+  if (!atEndOfBook && SETTINGS.touchReaderControls &&
+      mappedInput.wasScreenLongPress(selectionX, selectionY, true)) {
     automaticPageTurnActive = false;
     pendingManualTurn = 0;
-    startClipSelection(selectionX, selectionY);
+    // The contact stays live so the same finger can drag the selection out of
+    // the long-pressed word; drop it when nothing took it over.
+    if (!startClipSelection(selectionX, selectionY)) mappedInput.suppressScreenTouchContact();
     return;
   }
 

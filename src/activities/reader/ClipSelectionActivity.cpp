@@ -114,7 +114,22 @@ void ClipSelectionActivity::onEnter() {
       return;
     }
     selected = rangeStart = hit;
-    ignoreInitialTouch = true;
+    // The reader's long press hands over a finger that is normally still down:
+    // carry it on as a drag from this word, so extending the selection needs no
+    // lift and no handle grab. Already lifted: wait the old contact out.
+    int heldX = 0;
+    int heldY = 0;
+    if (mappedInput.isScreenTouchHeld(heldX, heldY)) {
+      dragOffsetX = 0;
+      dragOffsetY = 0;
+      touchDragSelecting = true;
+      touchDragHasMoved = false;
+      touchDragStartX = heldX;
+      touchDragStartY = heldY;
+      touchDragPageEndIndex = -1;
+    } else {
+      ignoreInitialTouch = true;
+    }
   }
   requestUpdate();
 }
@@ -543,6 +558,16 @@ void ClipSelectionActivity::loop() {
     touchDragSelecting = false;
     touchDragHasMoved = false;
     touchDragPageEndIndex = -1;
+    // The drag consumed this contact: drop its release so the lift cannot also
+    // arrive as a tap on an action, or as a page-turning swipe here or in the
+    // reader underneath. A new contact picks an action.
+    mappedInput.suppressScreenTouchContact();
+    // More than one word selected: the lift is the confirmation, so clip it
+    // instead of offering the action strip.
+    if (mode == Mode::Clip && rangeStart >= 0 && rangeStart != selected) {
+      confirmSelection(ClippingResult::Action::Clip);
+      return;
+    }
     requestUpdate();
     return;
   } else if (mappedInput.wasScreenTouchPressed(touchX, touchY)) {
