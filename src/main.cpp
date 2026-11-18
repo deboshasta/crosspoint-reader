@@ -69,6 +69,10 @@ FontDecompressor fontDecompressor;
 SdCardFontSystem sdFontSystem;
 FontCacheManager fontCacheManager(renderer.getFontMap(), renderer.getSdCardFonts(), renderer.getTtfFonts());
 static unsigned long allowSleepAt = 0;
+// Set when a Power + side button screenshot combination ends, so that side
+// button's release cannot also read as a sleep request (see
+// sideButtonSleepRequested).
+static bool ignoreSideButtonReleaseAfterCombo = false;
 static unsigned long lastX4ProPowerClickAt = 0;
 
 namespace {
@@ -846,6 +850,43 @@ void setup() {
   allowSleepAt = millis() + 2000;
 }
 
+// A side button assigned Sleep, pressed in the main reading view. Sleep is not
+// a page direction, so MappedInputManager::mapButton cannot carry it; it is
+// read here rather than in the reader because enterDeepSleep() is the whole
+// ordered sequence (progress save, plugin events, sleep screen, chip) and only
+// this loop may run it. An activity calling ActivityManager::goToSleep()
+// directly re-enters the activity loop and destroys itself mid-call.
+//
+// isForegroundReaderOnPage() is the scope, and the distinction matters: a
+// reader sub-screen that is its own activity (the clipping list, selection) is
+// excluded by "foreground reader", but the end-of-book menu and the toolbar
+// reader menu are STATES of the reader activity and read these same buttons
+// themselves -- the end-of-book menu through NavPrevious/NavNext, the toolbar
+// overlay through Button::Up/Down directly. This check runs before
+// activityManager.loop(), so without that gate main would sleep on the frame
+// those were trying to navigate on.
+//
+// Which contact is "Left" is MappedInputManager's to answer, so that page turns
+// and Sleep can never disagree about it.
+static bool sideButtonSleepRequested() {
+  if (!activityManager.isForegroundReaderOnPage()) return false;
+  // A side button held together with Power is a combination (screenshot),
+  // not a sleep request.
+  if (gpio.isPressed(HalGPIO::BTN_POWER)) return false;
+  const bool released = mappedInputManager.wasSideButtonActionReleased(CrossPointSettings::SIDE_SLEEP);
+  if (ignoreSideButtonReleaseAfterCombo) {
+    // Drop the side button's own release edge from a screenshot combination
+    // that ended with Power released first: that frame is consumed by the
+    // combo-reset branch, so this edge arrives afterwards with the combo state
+    // already cleared and Power no longer down. Held until the contacts settle.
+    if (!released && !gpio.isPressed(HalGPIO::BTN_UP) && !gpio.isPressed(HalGPIO::BTN_DOWN)) {
+      ignoreSideButtonReleaseAfterCombo = false;
+    }
+    return false;
+  }
+  return released;
+}
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
@@ -962,10 +1003,12 @@ void loop() {
     if (gpio.wasReleased(HalGPIO::BTN_POWER)) {
       screenshotButtonsReleased = true;
       screenshotComboActive = false;
+      ignoreSideButtonReleaseAfterCombo = true;
       return;
     }
     screenshotButtonsReleased = true;
     screenshotComboActive = false;
+    ignoreSideButtonReleaseAfterCombo = true;
   }
 
   // Consume the second X4 Pro power-button release so it does not also run a
@@ -1002,6 +1045,16 @@ void loop() {
   if (SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP && x4ProDoubleClickPwrLight &&
       lastX4ProPowerClickAt != 0 && millis() - lastX4ProPowerClickAt > X4PRO_POWER_DOUBLE_CLICK_MS) {
     lastX4ProPowerClickAt = 0;
+    enterDeepSleep();
+    // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
+    return;
+  }
+
+  // Checked before the inactivity timeout so an explicit press is never
+  // reported as an auto-sleep. allowSleepAt matches the power button: a press
+  // that woke the device must not put it straight back to sleep.
+  if (millis() >= allowSleepAt && sideButtonSleepRequested()) {
+    LOG_DBG("MAIN", "Side button assigned Sleep, sleeping");
     enterDeepSleep();
     // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
     return;

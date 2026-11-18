@@ -135,10 +135,15 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
                          {StrId::STR_HAPTIC_LOW, StrId::STR_HAPTIC_MEDIUM, StrId::STR_HAPTIC_HIGH}, "hapticIntensity",
                          StrId::STR_CAT_CONTROLS));
 #endif
-  emit(SettingInfo::Enum(
-      StrId::STR_SIDE_BTN_LAYOUT, &CrossPointSettings::sideButtonLayout,
-      {StrId::STR_PREV_NEXT, StrId::STR_NEXT_PREV, StrId::STR_DISABLED, StrId::STR_NEXT_NEXT, StrId::STR_PREV_PREV},
-      "sideButtonLayout", StrId::STR_CAT_CONTROLS));
+  // One entry per physical side button. Left is BTN_UP, Right is BTN_DOWN.
+  // The old combined "sideButtonLayout" key is migrated in fromJson and is no
+  // longer offered or written.
+  emit(SettingInfo::Enum(StrId::STR_SIDE_BTN_LEFT, &CrossPointSettings::sideButtonLeftAction,
+                         {StrId::STR_PREV, StrId::STR_NEXT, StrId::STR_DISABLED, StrId::STR_SLEEP},
+                         "sideButtonLeftAction", StrId::STR_CAT_CONTROLS));
+  emit(SettingInfo::Enum(StrId::STR_SIDE_BTN_RIGHT, &CrossPointSettings::sideButtonRightAction,
+                         {StrId::STR_PREV, StrId::STR_NEXT, StrId::STR_DISABLED, StrId::STR_SLEEP},
+                         "sideButtonRightAction", StrId::STR_CAT_CONTROLS));
 #if FREEINK_DEVICE_PICCO
   emit(SettingInfo::Enum(StrId::STR_SLIDE_SWITCH, &CrossPointSettings::slideSwitchAction,
                          {StrId::STR_FRONTLIGHT, StrId::STR_NIGHT_MODE, StrId::STR_TOUCH_READER_CONTROLS},

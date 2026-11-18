@@ -222,11 +222,13 @@
     const shortPwrBtnVal = getControlValue('shortPwrBtn');
     const pwrBtnFootnoteBackRow = document.getElementById('row-setting-pwrBtnFootnoteBack');
     if (pwrBtnFootnoteBackRow) {
-      if (shortPwrBtnVal === 4) {
-        pwrBtnFootnoteBackRow.style.display = '';
-      } else {
-        pwrBtnFootnoteBackRow.style.display = 'none';
-      }
+      // A select's value here is a DISPLAY index, and that order is
+      // board-conditional and shifts whenever an action is added, so the index
+      // that means Links and Footnotes comes from the server with the setting.
+      const shortPwrBtnSetting = findSetting('shortPwrBtn');
+      const footnotesOption = shortPwrBtnSetting ? shortPwrBtnSetting.footnotesOption : undefined;
+      const showFootnoteBack = footnotesOption !== undefined && shortPwrBtnVal === footnotesOption;
+      pwrBtnFootnoteBackRow.style.display = showFootnoteBack ? '' : 'none';
     }
   }
 

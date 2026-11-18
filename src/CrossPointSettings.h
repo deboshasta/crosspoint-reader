@@ -107,6 +107,17 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     SIDE_BUTTON_LAYOUT_COUNT
   };
 
+  // What one side button does while reading. Persisted, so append new actions
+  // at the end. Left is the BTN_UP contact and Right is BTN_DOWN; the defaults
+  // below reproduce the old PREV_NEXT layout.
+  enum SIDE_BUTTON_ACTION {
+    SIDE_PREV = 0,
+    SIDE_NEXT = 1,
+    SIDE_ACTION_DISABLED = 2,
+    SIDE_SLEEP = 3,
+    SIDE_BUTTON_ACTION_COUNT
+  };
+
   // Font family options (built-in fonts only; SD card fonts use sdFontFamilyName)
   enum FONT_FAMILY { NOTOSANS = 0, FONT_FAMILY_COUNT };
   static constexpr uint8_t LEGACY_NOTOSERIF = 0;
@@ -174,6 +185,8 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
     PWR_BOOKMARK = 7,
     PWR_SYNC = 8,
     PWR_READER_MENU = 9,
+    // Appended: these values are persisted, so new actions go at the end.
+    PREV_PAGE = 10,
     SHORT_PWRBTN_COUNT
   };
 
@@ -309,7 +322,15 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t orientation = PORTRAIT;
   // Button layouts (front layout retained for migration only)
   uint8_t frontButtonLayout = BACK_CONFIRM_LEFT_RIGHT;
+  // Superseded by the per-button actions below and now read by nothing: the
+  // migration in fromJson reads the stored "sideButtonLayout" JSON key, not
+  // this field, and SettingsList no longer emits it, so it is neither loaded
+  // nor saved. Kept so an older settings file still parses; the
+  // PREV_NEXT-family enumerators above ARE still live, as the migration
+  // switches on them.
   uint8_t sideButtonLayout = PREV_NEXT;
+  uint8_t sideButtonLeftAction = SIDE_PREV;
+  uint8_t sideButtonRightAction = SIDE_NEXT;
   uint8_t frontButtonFollowOrientation = 0;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.

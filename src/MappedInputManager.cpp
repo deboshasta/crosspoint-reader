@@ -105,8 +105,31 @@ MappedInputManager::Button MappedInputManager::mapScreenDirection(const Button b
   return directions[orientation][direction];
 }
 
+bool MappedInputManager::sideButtonFor(const uint8_t action, bool (HalGPIO::*fn)(uint8_t) const) const {
+  // "Left"/"Right" name sides of the screen as held, not GPIO contacts, so the
+  // pair swaps in INVERTED / LANDSCAPE_CCW under the same orientation policy
+  // the front page buttons and the rotated hint labels already follow. Added
+  // deliberately in 8cb0a390 (#3318) for issue #2964; do not drop it here
+  // without dropping it for the front buttons too.
+  const bool swapped = isNavDirectionSwapped();
+  const uint8_t leftPin = swapped ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP;
+  const uint8_t rightPin = swapped ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
+  bool hit = false;
+  if (SETTINGS.sideButtonLeftAction == action) hit = (gpio.*fn)(leftPin);
+  if (!hit && SETTINGS.sideButtonRightAction == action) hit = (gpio.*fn)(rightPin);
+  return hit;
+}
+
+// Sleep is not a page direction, so it cannot travel through mapButton -- but it
+// must still agree with page mapping about which contact "Left" is, so it shares
+// sideButtonFor instead of reading the contacts itself. These reads are
+// non-consuming per-frame bitmask tests, so calling this costs nothing and
+// cannot take an edge away from another caller.
+bool MappedInputManager::wasSideButtonActionReleased(const uint8_t action) const {
+  return sideButtonFor(action, &HalGPIO::wasReleased);
+}
+
 bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
-  const auto sideLayout = SETTINGS.sideButtonLayout;
 
   switch (button) {
     case Button::Back:
@@ -131,33 +154,12 @@ bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint
       // Power button bypasses remapping.
       return (gpio.*fn)(HalGPIO::BTN_POWER);
     case Button::PageBack:
-      // Reader page navigation uses side buttons and can be swapped via settings.
-      switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
-        case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
-        case CrossPointSettings::PREV_PREV:
-          return (gpio.*fn)(HalGPIO::BTN_UP) || (gpio.*fn)(HalGPIO::BTN_DOWN);
-        case CrossPointSettings::NEXT_NEXT:
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          return false;
-      }
+      // Reader page navigation uses the side buttons, each doing what its own
+      // setting assigns; sideButtonFor resolves Left/Right through the
+      // orientation policy, as the front page buttons below do.
+      return sideButtonFor(CrossPointSettings::SIDE_PREV, fn);
     case Button::PageForward:
-      // Reader page navigation uses side buttons and can be swapped via settings.
-      switch (sideLayout) {
-        case CrossPointSettings::PREV_NEXT:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN);
-        case CrossPointSettings::NEXT_PREV:
-          return (gpio.*fn)(isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP);
-        case CrossPointSettings::NEXT_NEXT:
-          return (gpio.*fn)(HalGPIO::BTN_UP) || (gpio.*fn)(HalGPIO::BTN_DOWN);
-        case CrossPointSettings::PREV_PREV:
-        case CrossPointSettings::SIDE_BUTTONS_DISABLED:
-        default:
-          return false;
-      }
+      return sideButtonFor(CrossPointSettings::SIDE_NEXT, fn);
     case Button::NavNext:
       // Logical "next item" navigation: side Down + front Right, with the control axis flipped in
       // INVERTED / LANDSCAPE_CCW under the live orientation policy, matching the rotated hint labels.

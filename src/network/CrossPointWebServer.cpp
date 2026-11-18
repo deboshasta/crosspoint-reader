@@ -1462,6 +1462,12 @@ void CrossPointWebServer::handleGetSettings() const {
             options.add(I18N.get(opt));
           }
         }
+        // `value` for this setting is a display index into a board-conditional
+        // list, so the page cannot know which entry is Links and Footnotes.
+        // Tell it, rather than leaving a literal in the HTML to go stale.
+        if (s.key && strcmp(s.key, "shortPwrBtn") == 0) {
+          doc["footnotesOption"] = shortPowerButtonDisplayIndexOf(CrossPointSettings::FOOTNOTES);
+        }
         break;
       }
       case SettingType::VALUE: {

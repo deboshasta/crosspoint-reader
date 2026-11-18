@@ -113,6 +113,11 @@ class ActivityManager {
   // Bluetooth page turner (lib/BlePageTurner): the book in front, whether it has painted a page, and
   // a page or chapter turn from a remote. False when no book in front took the turn.
   bool isForegroundReader() const;
+  /** A foreground reader showing its page, with no toolbar, panel or
+   *  end-of-book menu over it owning the device keys. Side-button actions
+   *  that are not page directions (Sleep) are only offered here, because
+   *  those sub-modes navigate with the same buttons. */
+  bool isForegroundReaderOnPage() const;
   bool isRemoteReaderContext() const;
   bool remoteClick(RemoteButton button);
   // Home is in front and has painted a frame of its own (not one left from the screen before).

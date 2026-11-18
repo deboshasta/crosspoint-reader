@@ -310,7 +310,7 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
 
 - **Remap Front Buttons**: A menu for customising the function of each bottom edge button.
 
-- **Side Button Layout (reader)**: Swap the order of the up and down side buttons from "Prev/Next" (default) to "Next/Prev". You can also disable them entirely. This change is only in effect when reading.
+- **Left Side Button (Reader)** and **Right Side Button (Reader)**: Set what each side button does while reading, independently of the other: "Prev", "Next", "Disabled" or "Sleep". The defaults are Prev on the left and Next on the right, and both buttons may be given the same action. "Left" and "Right" mean the sides as you are holding the device, so they follow the reading orientation. These settings apply only while reading: elsewhere the side buttons always move through lists, so a button set to "Disabled" or "Sleep" still navigates menus, the clippings list and selection.
 
 - **Long-press Chapter Skip**: Set whether long-pressing page turn buttons skips to the next/previous chapter:
   
@@ -328,6 +328,7 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
   - "Ignore" (default) - Require a long press to turn off the device
   - "Sleep" - A short press puts the device into sleep mode
   - "Page Turn" - A short press in reading mode turns to the next page; a long press turns the device off
+  - "Previous Page" - A short press in reading mode turns to the previous page; a long press turns the device off
   - "Links and Footnotes" - A short press in reading mode opens link selection. If the page has only one link, it opens directly. After following a link, a short press returns to the previous location.
   - "Refresh" - A short press triggers a manual full-screen refresh, useful for clearing ghosting
 - **Quick return from links**: Controls whether a short press of the power button acts as Back after following a link or footnote.
@@ -641,9 +642,9 @@ Once you have opened a book, the button layout changes to facilitate reading.
 | **Previous Page** | Press **Left** _or_ **Side Up**    |
 | **Next Page**     | Press **Right** _or_ **Side Down** |
 
-The role of the side buttons can be swapped in the **[Controls Settings](#363-controls)**.
+Each side button's role can be set independently in the **[Controls Settings](#363-controls)**, including turning one off or using it to put the device to sleep.
 
-If the **Short Power Button Click** setting is set to "Page Turn", you can also turn to the next page by briefly pressing the Power button.
+If the **Short Power Button Click** setting is set to "Page Turn" or "Previous Page", a brief press of the Power button turns to the next or previous page respectively.
 
 ### Chapter Navigation
 

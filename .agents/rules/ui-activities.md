@@ -34,7 +34,8 @@ when changing a screen.
 
 Activities use `MappedInputManager::Button`, not raw `HalGPIO::BTN_*` indices
 except in `ButtonRemapActivity`. Front buttons are user-remappable; page buttons
-follow `SETTINGS.sideButtonLayout`. Inspect
+follow `SETTINGS.sideButtonLeftAction` / `sideButtonRightAction`, resolved
+through the orientation policy. Inspect
 [MappedInputManager](../../src/MappedInputManager.cpp) for the mapping.
 
 ### Input frames and ownership

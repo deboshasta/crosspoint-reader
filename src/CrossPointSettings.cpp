@@ -220,6 +220,38 @@ bool CrossPointSettings::fromJson(JsonVariantConst doc) {
     }
   }
 
+  // Older files stored one combined side-button layout under "sideButtonLayout"
+  // (Prev/Next, Next/Prev, Disabled, Next/Next, Prev/Prev). Split it into the
+  // per-button actions; Left is BTN_UP and Right is BTN_DOWN, so every old
+  // value maps across without loss.
+  if (doc["sideButtonLeftAction"].isNull() && doc["sideButtonRightAction"].isNull() &&
+      doc["sideButtonLayout"].is<uint8_t>()) {
+    switch (doc["sideButtonLayout"].as<uint8_t>()) {
+      case NEXT_PREV:
+        sideButtonLeftAction = SIDE_NEXT;
+        sideButtonRightAction = SIDE_PREV;
+        break;
+      case SIDE_BUTTONS_DISABLED:
+        sideButtonLeftAction = SIDE_ACTION_DISABLED;
+        sideButtonRightAction = SIDE_ACTION_DISABLED;
+        break;
+      case NEXT_NEXT:
+        sideButtonLeftAction = SIDE_NEXT;
+        sideButtonRightAction = SIDE_NEXT;
+        break;
+      case PREV_PREV:
+        sideButtonLeftAction = SIDE_PREV;
+        sideButtonRightAction = SIDE_PREV;
+        break;
+      case PREV_NEXT:
+      default:
+        sideButtonLeftAction = SIDE_PREV;
+        sideButtonRightAction = SIDE_NEXT;
+        break;
+    }
+    needsResave = true;
+  }
+
   if (doc["sleepTimeoutMinutes"].isNull() && !doc["sleepTimeout"].isNull()) {
     const uint8_t legacyValue =
         clamp(doc["sleepTimeout"] | (uint8_t)SLEEP_10_MIN, SLEEP_TIMEOUT_COUNT, (uint8_t)SLEEP_10_MIN);

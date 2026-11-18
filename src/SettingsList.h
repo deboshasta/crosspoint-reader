@@ -226,6 +226,7 @@ inline std::vector<ShortPowerButtonOption> shortPowerButtonOptions() {
   std::vector<ShortPowerButtonOption> options = {{StrId::STR_IGNORE, CrossPointSettings::IGNORE},
                                                  {StrId::STR_SLEEP, CrossPointSettings::SLEEP},
                                                  {StrId::STR_PAGE_TURN, CrossPointSettings::PAGE_TURN},
+                                                 {StrId::STR_PREV_PAGE, CrossPointSettings::PREV_PAGE},
                                                  {StrId::STR_FORCE_REFRESH, CrossPointSettings::FORCE_REFRESH},
                                                  {StrId::STR_FOOTNOTES, CrossPointSettings::FOOTNOTES}};
   options.reserve(CrossPointSettings::SHORT_PWRBTN_COUNT);
@@ -255,6 +256,19 @@ inline uint8_t shortPowerButtonDisplayValue() {
     if (options[i].value == SETTINGS.shortPwrBtn) return static_cast<uint8_t>(i);
   }
   return CrossPointSettings::IGNORE;
+}
+
+// Display index of one specific action, for callers that must point at it
+// rather than at whatever is currently selected (the web UI reveals the
+// footnote-return row only for FOOTNOTES). The menu order is board-conditional,
+// so this must never be written as a literal. Returns an index no option has
+// when the action is not offered on this board.
+inline uint8_t shortPowerButtonDisplayIndexOf(const uint8_t action) {
+  const auto options = shortPowerButtonOptions();
+  for (size_t i = 0; i < options.size(); i++) {
+    if (options[i].value == action) return static_cast<uint8_t>(i);
+  }
+  return static_cast<uint8_t>(options.size());
 }
 
 inline void setShortPowerButtonFromDisplayValue(const uint8_t displayValue) {

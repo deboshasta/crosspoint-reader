@@ -10,7 +10,8 @@
 #include "activities/Activity.h"
 
 class ReaderActivity : public Activity {
-  friend class ActivityManager;  // turns pages for a Bluetooth remote (ActivityManager::remoteTurn)
+  friend class ActivityManager;  // turns pages for a Bluetooth remote (ActivityManager::remoteTurn) and
+                                 // reads inputOverPage() for isForegroundReaderOnPage()
 
  protected:
   std::string bookPath;

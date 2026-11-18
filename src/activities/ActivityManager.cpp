@@ -414,6 +414,14 @@ bool ActivityManager::isForegroundReader() const {
   return pendingAction == PendingAction::None && currentActivity && currentActivity->isReaderActivity();
 }
 
+bool ActivityManager::isForegroundReaderOnPage() const {
+  if (!isForegroundReader()) return false;
+  // Same question, and the same predicate, as whether a remote's page turn may
+  // reach the book: inputOverPage() is true for the end-of-book menu and for an
+  // EpubReader overlay, both of which read the side buttons themselves.
+  return !static_cast<const ReaderActivity*>(currentActivity.get())->inputOverPage();
+}
+
 bool ActivityManager::isRemoteReaderContext() const {
   return pendingAction == PendingAction::None && currentActivity && currentActivity->acceptsRemoteInput();
 }

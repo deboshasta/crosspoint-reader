@@ -55,6 +55,10 @@ class MappedInputManager {
   bool hasRemoteClick() const { return remoteInput.button != RemoteButton::None; }
   bool wasPressed(Button button) const;
   bool wasReleased(Button button) const;
+  // Release edge of a side button assigned `action` (CrossPointSettings::
+  // SIDE_*). For actions mapButton cannot carry, such as Sleep; shares the
+  // Left/Right-to-contact resolution with page mapping.
+  bool wasSideButtonActionReleased(uint8_t action) const;
   // One-shot threshold event while the button is down; consumes its release.
   bool wasLongPressed(Button button, unsigned long thresholdMs) const;
   bool consumeSuppressedRelease() const;
@@ -138,6 +142,10 @@ class MappedInputManager {
   Button mapScreenDirection(Button button) const;
   Labels mapFrontLabels(const char* back, const char* confirm, const char* left, const char* right) const;
   bool mapButton(Button button, bool (HalGPIO::*fn)(uint8_t) const) const;
+  // True when a side button assigned `action` satisfies `fn`. Either or both
+  // buttons may carry the same action, and which contact is "Left" follows the
+  // orientation policy.
+  bool sideButtonFor(uint8_t action, bool (HalGPIO::*fn)(uint8_t) const) const;
   // SDK edge classification (fui::edgeSwipe) + the shared decode/held-time
   // bookkeeping; the wrappers below give each edge its board meaning.
   bool wasEdgeSwipe(freeink::ui::ScreenEdge edge) const;
