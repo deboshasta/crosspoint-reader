@@ -453,6 +453,39 @@ void DictionaryDefinitionActivity::navigateDefinition(const bool back) {
   requestUpdate();
 }
 
+// Swap in a sibling supplied by the owning list. Unlike navigateDefinition
+// this lays the next item out *before* the open one is released: a clipping
+// caps at CLIPPING_TEXT_MAX (4 KB) and plain layout costs one 8-byte span per
+// line, so both fit at once and a failed layout leaves the open item on screen
+// instead of stranding an empty page. Unlike navigateDefinition it also keeps
+// the SD font caches: the sibling is the same book in the same reader font, so
+// most glyphs are already resident and re-faulting them would cost an SD read
+// per swipe. That arena is not in the 4 KB budget above and is internal RAM on
+// the C3 baseline, so it is the term to re-measure if this path ever grows.
+bool DictionaryDefinitionActivity::browseSibling(const int delta) {
+  if (!browse) return false;
+  Definition next;
+  if (!browse(delta, next.headword, next.text)) return false;
+
+  RenderLock lock;
+  if (!prepareDefinition(next)) {
+    LOG_ERR("DICT", "Failed to lay out sibling item");
+    // Say so, as navigateDefinition's recover path does: a swipe that silently
+    // did nothing is indistinguishable from reaching the end of the list.
+    showMessage(StrId::STR_DICT_LOW_MEMORY);
+    return false;
+  }
+  content = std::move(next);
+  messageVisible = false;
+  // Only now is the sibling really open, so only now may the owner's cursor
+  // move. Committing inside the read would leave the list pointing at a row
+  // that is not on screen whenever the layout above fails.
+  if (browseCommit) browseCommit(delta);
+  haptic_feedback::touchAction();
+  requestUpdate();
+  return true;
+}
+
 bool DictionaryDefinitionActivity::buildPlainSelectionPages() {
   // Only the selection window gets packed word arenas; the definition keeps its cheap line spans.
   const int fontId = SETTINGS.getReaderFontId();
@@ -608,6 +641,21 @@ void DictionaryDefinitionActivity::loop() {
   if (lookup && mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
     startSelection();
     return;
+  }
+
+  // A mid-screen horizontal swipe walks to the sibling item, as in the image
+  // viewer. Left-edge left-to-right swipes never reach here: wasBackGesture
+  // folds them into Button::Back, handled above.
+  if (browse) {
+    const auto swipe = mappedInput.wasSwipe();
+    if (swipe == MappedInputManager::SwipeDir::Left) {
+      browseSibling(1);
+      return;
+    }
+    if (swipe == MappedInputManager::SwipeDir::Right) {
+      browseSibling(-1);
+      return;
+    }
   }
 
   // Page navigation must keep polling input while the render task refreshes the display.

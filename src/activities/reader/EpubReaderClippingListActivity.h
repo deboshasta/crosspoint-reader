@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <string>
 
 #include "activities/UiListActivity.h"
 #include "clippings/ClippingPreview.h"
@@ -16,7 +17,9 @@ class EpubReaderClippingListActivity final : public UiListActivity {
  private:
   void rebuildRows();
   void refreshRowWindow(int start);
-  void openSelected();
+  bool readClippingInto(int index, std::string& title, std::string& text);
+  void showClippingActions();
+  void goToSelectedPassage();
   void readSelected();
   void showDeleteConfirmation();
   void deleteSelected();
@@ -27,6 +30,7 @@ class EpubReaderClippingListActivity final : public UiListActivity {
   void onRowLongPress(int index) override;
   bool handleCustomInput() override;
   bool handleButtons() override;
+  void drawFooter() override;
   const char* headerTitle() const override;
 
   static constexpr int ROW_WINDOW = 8;

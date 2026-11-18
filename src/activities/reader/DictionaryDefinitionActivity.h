@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -27,6 +28,26 @@ class DictionaryDefinitionActivity final : public Activity {
         htmlDefinition(htmlDefinition) {}
 
   bool enableLookup(Dictionary& dictionary, std::string&& query);
+
+  // Opt-in sibling browsing for list-backed viewers (the clippings list).
+  // delta is +1 next / -1 previous. Left unset by dictionary lookups, which
+  // keeps horizontal swipes unused there as before.
+  //
+  // read writes the sibling's title and text and returns false at either end.
+  // It must not move the owner's cursor: the layout can still fail after it
+  // returns, and commit runs only once the sibling is actually on screen.
+  // Splitting the two is what keeps the list and the viewer from disagreeing
+  // about which item is open.
+  //
+  // Only sized for plain-text owners. The memory argument in browseSibling
+  // assumes one 8-byte span per line; an owner built with htmlDefinition would
+  // lay out styled pages at peak coexistence and needs that budget redone.
+  using BrowseHandler = std::function<bool(int delta, std::string& title, std::string& text)>;
+  using BrowseCommit = std::function<void(int delta)>;
+  void enableBrowse(BrowseHandler read, BrowseCommit commit) {
+    browse = std::move(read);
+    browseCommit = std::move(commit);
+  }
 
   void onEnter() override;
   void onExit() override;
@@ -100,12 +121,15 @@ class DictionaryDefinitionActivity final : public Activity {
   void startSelection(int x = -1, int y = -1);
   bool buildPlainSelectionPages();
   void navigateDefinition(bool back);
+  bool browseSibling(int delta);
   bool restoreCurrentDefinition(bool styled);
   void showMessage(StrId message);
 
   Definition content;
   const bool htmlDefinition;
   std::unique_ptr<LookupState> lookup;
+  BrowseHandler browse;
+  BrowseCommit browseCommit;
   StrId message = StrId::STR_DICT_NOT_FOUND;
   unsigned long messageTime = 0;
   bool messageVisible = false;

@@ -1,6 +1,7 @@
 #include "EpubReaderClippingListActivity.h"
 
 #include <GfxRenderer.h>
+#include <HalMemory.h>
 #include <I18n.h>
 #include <Logging.h>
 #include <Memory.h>
@@ -19,7 +20,10 @@ namespace fui = freeink::ui;
 
 namespace {
 
-constexpr int ENTER_DELETE_MODE_MS = 700;
+constexpr int ENTER_ACTIONS_MODE_MS = 700;
+// Matches HEAP_HEADROOM in DictionaryDefinitionActivity.cpp, the other half
+// of this flow.
+constexpr size_t CLIP_HEAP_HEADROOM = 8 * 1024;
 
 }  // namespace
 
@@ -68,41 +72,89 @@ void EpubReaderClippingListActivity::refreshRowWindow(const int start) {
   windowStart = clamped;
 }
 
-void EpubReaderClippingListActivity::openSelected() {
+void EpubReaderClippingListActivity::showClippingActions() {
   if (confirmPopup.isActive() || nav.selected < 0 || nav.selected >= listCount()) return;
   const Clipping* clipping = CLIPPINGS.clippingAt(static_cast<size_t>(nav.selected));
   if (!clipping) return;
-  static constexpr StrId OPTIONS[] = {StrId::STR_OPEN, StrId::STR_GO_TO_PASSAGE};
+  static constexpr StrId ANCHORED_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_GO_TO_PASSAGE, StrId::STR_DELETE};
+  static constexpr StrId PLAIN_OPTIONS[] = {StrId::STR_OPEN, StrId::STR_DELETE};
+  // Go to Passage needs the offsets the clipping was anchored at. Clippings
+  // saved without them list Open and Delete only, which moves Delete up one.
   const bool anchored = clipping->startOffset != UINT32_MAX && clipping->endOffset != UINT32_MAX;
-  confirmPopup.show(StrId::STR_CLIPPINGS, OPTIONS, anchored ? 2 : 1, 0, [this](const int index) {
-    if (index == 0) {
-      readSelected();
-      return;
-    }
-    const Clipping* selectedClipping = CLIPPINGS.clippingAt(static_cast<size_t>(nav.selected));
-    if (!selectedClipping) return;
-    ProgressChangeResult result;
-    result.spineIndex = selectedClipping->spineIndex;
-    result.page = selectedClipping->startPage;
-    result.hasVisibleTextOffset = true;
-    result.visibleTextOffset = selectedClipping->startOffset;
-    setResult(std::move(result));
-    finish();
-  });
+  confirmPopup.show(StrId::STR_CLIPPINGS, anchored ? ANCHORED_OPTIONS : PLAIN_OPTIONS, anchored ? 3 : 2, 0,
+                    [this, anchored](const int index) {
+                      const int deleteIndex = anchored ? 2 : 1;
+                      if (index == 0) {
+                        readSelected();
+                      } else if (anchored && index == 1) {
+                        goToSelectedPassage();
+                      } else if (index == deleteIndex) {
+                        showDeleteConfirmation();
+                      }
+                    });
   requestUpdate();
 }
 
-void EpubReaderClippingListActivity::readSelected() {
+void EpubReaderClippingListActivity::goToSelectedPassage() {
   if (nav.selected < 0 || nav.selected >= listCount()) return;
   const Clipping* clipping = CLIPPINGS.clippingAt(static_cast<size_t>(nav.selected));
+  if (!clipping) return;
+  ProgressChangeResult result;
+  result.spineIndex = clipping->spineIndex;
+  result.page = clipping->startPage;
+  result.hasVisibleTextOffset = true;
+  result.visibleTextOffset = clipping->startOffset;
+  setResult(std::move(result));
+  finish();
+}
+
+bool EpubReaderClippingListActivity::readClippingInto(const int index, std::string& title, std::string& text) {
+  if (index < 0 || index >= listCount()) return false;
+  const Clipping* clipping = CLIPPINGS.clippingAt(static_cast<size_t>(index));
+  if (!clipping) return false;
+  // readClippingText resizes `text` to the stored length, and the build has
+  // exceptions disabled, so a failed allocation aborts rather than returning.
+  // Sibling browsing reads here while the open clipping is still resident, so
+  // check the heap first the way the rest of this flow does.
+  const size_t need = static_cast<size_t>(clipping->textLength) + 1;
+  const auto heap = HalMemory::getDefaultHeap();
+  if (heap.largestBlockBytes < need || heap.freeBytes < need + CLIP_HEAP_HEADROOM) {
+    LOG_ERR("CLIP", "Low heap for clipping text (%u bytes)", static_cast<unsigned>(need));
+    return false;
+  }
+  if (!CLIPPINGS.readClippingText(static_cast<size_t>(index), text)) {
+    LOG_ERR("CLIP", "Failed to read clipping text %d", index);
+    return false;
+  }
+  title = clipping->chapterTitle[0] != '\0' ? clipping->chapterTitle : tr(STR_CLIPPINGS);
+  return true;
+}
+
+void EpubReaderClippingListActivity::readSelected() {
+  std::string title;
   std::string text;
-  if (!clipping || !CLIPPINGS.readClippingText(static_cast<size_t>(nav.selected), text)) return;
-  const std::string title = clipping->chapterTitle[0] != '\0' ? clipping->chapterTitle : tr(STR_CLIPPINGS);
-  auto detail = makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, title, std::move(text));
+  if (!readClippingInto(nav.selected, title, text)) return;
+  auto detail =
+      makeUniqueNoThrow<DictionaryDefinitionActivity>(renderer, mappedInput, std::move(title), std::move(text));
   if (!detail) {
     LOG_ERR("CLIP", "Failed to allocate clipping detail activity");
     return;
   }
+  // Swiping in the detail view walks this list. Capturing `this` is safe
+  // because the parent stays on the activity stack under the child, and the
+  // selection follows along so Back returns to the clipping last read.
+  detail->enableBrowse(
+      [this](const int delta, std::string& nextTitle, std::string& nextText) {
+        // Read only. The viewer commits the cursor once the sibling is laid
+        // out; moving it here would strand the list on a row that is not on
+        // screen if that fails.
+        return readClippingInto(nav.selected + delta, nextTitle, nextText);
+      },
+      [this](const int delta) {
+        // requestSelection is the input-task API: it stores the selection at
+        // once and leaves the render-owned viewport pull to the next build.
+        nav.requestSelection(nav.selected + delta);
+      });
   startActivityForResult(std::move(detail), [this](const ActivityResult&) { requestUpdate(); });
 }
 
@@ -110,14 +162,15 @@ void EpubReaderClippingListActivity::activateIndex(const int index) {
   if (confirmPopup.isActive() || index < 0 || index >= listCount()) return;
   app.clearTapFlash();
   nav.selected = index;
-  openSelected();
+  // A tap reads the clipping straight away; the action list is on long press.
+  readSelected();
 }
 
 void EpubReaderClippingListActivity::onRowLongPress(const int index) {
   if (confirmPopup.isActive() || index < 0 || index >= listCount()) return;
   app.clearTapFlash();
   nav.selected = index;
-  showDeleteConfirmation();
+  showClippingActions();
 }
 
 void EpubReaderClippingListActivity::showDeleteConfirmation() {
@@ -158,8 +211,8 @@ bool EpubReaderClippingListActivity::handleCustomInput() {
 }
 
 bool EpubReaderClippingListActivity::handleButtons() {
-  if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, ENTER_DELETE_MODE_MS)) {
-    showDeleteConfirmation();
+  if (mappedInput.wasLongPressed(MappedInputManager::Button::Confirm, ENTER_ACTIONS_MODE_MS)) {
+    showClippingActions();
     return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
@@ -167,10 +220,18 @@ bool EpubReaderClippingListActivity::handleButtons() {
     return true;
   }
   if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
-    openSelected();
+    readSelected();
     return true;
   }
   return false;
+}
+
+void EpubReaderClippingListActivity::drawFooter() {
+  // The help text reads "Hold Open for Actions", so the confirm key has to be
+  // labelled Open on this screen. LibraryListActivity pairs the same hint with
+  // the same label for the same reason; the base footer says Select.
+  const auto labels = mappedInput.mapLabels(tr(STR_BACK), tr(STR_OPEN), tr(STR_DIR_UP), tr(STR_DIR_DOWN));
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void EpubReaderClippingListActivity::buildScreen(UiScreen& screen) {
@@ -190,7 +251,7 @@ void EpubReaderClippingListActivity::buildScreen(UiScreen& screen) {
     const int helpHeight = renderer.getLineHeight(UI_10_FONT_ID);
     const fui::Rect band = screen.takeBottom(static_cast<int16_t>(helpHeight + metrics.verticalSpacing));
     GUI.drawHelpText(renderer, Rect{band.x, band.y + metrics.verticalSpacing, band.width, helpHeight},
-                     tr(STR_HOLD_SELECT_TO_DELETE));
+                     tr(STR_HOLD_OPEN_FOR_ACTIONS));
   }
 
   fui::ListProps props;
