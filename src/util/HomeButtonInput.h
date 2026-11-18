@@ -16,6 +16,10 @@ enum class HomeButtonAction : uint8_t {
   ReaderMenu,
   ToggleFrontlight,
   CreateClipping,
+  // Appended: these values are persisted in the three homeButton*Action
+  // settings, so new actions go at the end. Keep ACTION_LABELS in step --
+  // HomeButtonSettings.h static_asserts the two lengths match.
+  Sleep,
   Count
 };
 

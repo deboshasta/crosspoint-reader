@@ -1060,6 +1060,30 @@ void loop() {
     return;
   }
 
+  // The home key's own Sleep action, by the same mechanism as the side buttons
+  // above: enterDeepSleep() from this loop, never ActivityManager::goToSleep().
+  //
+  // The SCOPE is deliberately different, and the test that decides it for any
+  // future sleep source is: does another consumer read this same input token in
+  // the same frame? The side buttons need isForegroundReaderOnPage() because
+  // their raw release edges are also read by the reader's own in-place states
+  // -- the end-of-book menu and the toolbar overlay -- which this loop runs
+  // before, and would otherwise sleep out from under them. The home key cannot
+  // collide: HomeButtonInput has already resolved tap, double-tap and long
+  // press into one action value, and every reader of homeButtonAction() tests
+  // for a specific value (with a default), so none of them claims Sleep.
+  //
+  // HomeButtonAction is in effect already split into a global set dispatched
+  // outside any activity -- Home, from ActivityManager::loop(), plus
+  // ToggleFrontlight and Refresh below -- and a reader-scoped set the reader
+  // reads for itself. Sleep joins the global set.
+  if (millis() >= allowSleepAt && mappedInputManager.homeButtonAction() == HomeButtonAction::Sleep) {
+    LOG_DBG("MAIN", "Home button assigned Sleep, sleeping");
+    enterDeepSleep();
+    // This should never be hit as `enterDeepSleep` calls esp_deep_sleep_start
+    return;
+  }
+
   const unsigned long sleepTimeoutMs = SETTINGS.getSleepTimeoutMs();
   if (sleepTimeoutMs > 0 && millis() - lastActivityTime >= sleepTimeoutMs) {
     LOG_DBG("SLP", "Auto-sleep triggered after %lu ms of inactivity", sleepTimeoutMs);

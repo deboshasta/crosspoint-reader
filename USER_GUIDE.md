@@ -310,6 +310,8 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
 
 - **Remap Front Buttons**: A menu for customising the function of each bottom edge button.
 
+- **Home Button Gestures**: A menu assigning an action to each of the three home key gestures: **Tap** (default Home), **Double Tap** (default Toggle Frontlight) and **Long Press** (default Reader Menu). Any of the available actions can be put on any of the three, including "Sleep", which puts the device to sleep. Unlike the side button settings below, these apply **everywhere**, not only while reading.
+
 - **Left Side Button (Reader)** and **Right Side Button (Reader)**: Set what each side button does while reading, independently of the other: "Prev", "Next", "Disabled" or "Sleep". The defaults are Prev on the left and Next on the right, and both buttons may be given the same action. "Left" and "Right" mean the sides as you are holding the device, so they follow the reading orientation. These settings apply only while reading: elsewhere the side buttons always move through lists, so a button set to "Disabled" or "Sleep" still navigates menus, the clippings list and selection.
 
 - **Long-press Chapter Skip**: Set whether long-pressing page turn buttons skips to the next/previous chapter:

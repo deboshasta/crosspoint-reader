@@ -6,6 +6,13 @@
 
 namespace fui = freeink::ui;
 
+// The picker below hands every action to OptionPopup, which has no scrolling
+// and silently clamps with std::min rather than complaining -- so an action
+// past MAX_OPTIONS would simply be unreachable on the device, with nothing to
+// say so. Fail the build instead.
+static_assert(static_cast<int>(HomeButtonAction::Count) <= OptionPopup::MAX_OPTIONS,
+              "HomeButtonAction has outgrown OptionPopup::MAX_OPTIONS: the picker would silently drop actions");
+
 bool HomeButtonSettingsActivity::handleCustomInput() {
   return optionPopup.handleInput(mappedInput, [this] { requestUpdate(); });
 }

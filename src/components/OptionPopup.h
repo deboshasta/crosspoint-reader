@@ -267,11 +267,17 @@ class OptionPopup {
     onSelectCallback = nullptr;
   }
 
- private:
+ public:
   // The dialog has no scrolling, so options past MAX_OPTIONS would render off
   // screen anyway; a fixed cap keeps the DialogOption array on the stack and
-  // the interaction table small. +1 slot for the chrome guard rect.
+  // the interaction table small. Public because show() CLAMPS to it with
+  // std::min rather than complaining, so a caller whose option list can grow
+  // (see HomeButtonSettingsActivity) must static_assert against it or lose
+  // entries silently.
   static constexpr int MAX_OPTIONS = 16;
+
+ private:
+  // +1 slot for the chrome guard rect.
   static constexpr size_t INTERACTION_CAPACITY = MAX_OPTIONS + 1;
   static constexpr freeink::ui::ActionId ACTION_OPTION = 1;
   static constexpr freeink::ui::ActionId ACTION_CHROME = 2;
