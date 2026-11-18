@@ -51,6 +51,10 @@ struct ClippingResult {
   uint16_t wordCount = 0;
   uint32_t startOffset = UINT32_MAX;
   uint32_t endOffset = UINT32_MAX;
+  // Set when this selection was opened to edit an existing clipping AND every
+  // word of that clipping was on the loaded pages. Only then may the editor's
+  // result replace it: otherwise the unseen part would be discarded.
+  bool editRangeCovered = false;
 };
 
 struct ProgressChangeResult {

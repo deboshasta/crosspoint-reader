@@ -453,11 +453,44 @@ void EpubReaderActivity::openDictionaryWordSelect() {
   startClipSelection(-1, -1, ClipSelectionActivity::Mode::Lookup);
 }
 
+int EpubReaderActivity::clippingIndexAtScreenPoint(const int x, const int y) {
+  if (!section || !CLIPPINGS.hasClippings()) return -1;
+  // hasClippings() is book-wide, so one clipping anywhere would otherwise make
+  // every tap in every chapter deserialize a page and walk its words.
+  // drawClippingHighlights scopes itself the same way.
+  if (!chapterClippingCount()) return -1;
+  if (section->currentPage < 0 || section->currentPage >= section->pageCount) return -1;
+  auto page = section->loadPage(section->currentPage);
+  if (!page) return -1;
+  RenderLock lock;
+  return clippingAtPoint(*page, x, y);
+}
+
+size_t EpubReaderActivity::chapterClippingCount() const {
+  size_t count = 0;
+  for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
+    const Clipping* stored = CLIPPINGS.clippingAt(i);
+    if (stored && stored->spineIndex == currentSpineIndex) ++count;
+  }
+  return count;
+}
+
 bool EpubReaderActivity::startClipSelection(const int initialX, const int initialY,
-                                            const ClipSelectionActivity::Mode mode) {
+                                            const ClipSelectionActivity::Mode mode, const uint32_t editStartOffset,
+                                            const uint32_t editEndOffset, const int editStartPage) {
   if (!section || !epub || section->currentPage < 0 || section->currentPage >= section->pageCount) return false;
 
-  const int pageNumber = section->currentPage;
+  // The window normally runs forward from the page in view. Editing a clipping
+  // that began earlier rebases it onto that clipping's own first page, so its
+  // whole extent is loaded and the edit can replace it. Bounded so the tapped
+  // page stays inside the window, and only on the edit path: pageOffset 0 is
+  // what initialX/initialY are relative to, and the edit path passes neither.
+  int basePage = section->currentPage;
+  if (editStartOffset != UINT32_MAX && initialX < 0 && editStartPage >= 0 && editStartPage < basePage &&
+      basePage - editStartPage < CLIP_SELECTION_PAGE_WINDOW) {
+    basePage = editStartPage;
+  }
+  const int pageNumber = basePage;
   const uint16_t pageCount = section->pageCount;
   const uint16_t spineIndex = static_cast<uint16_t>(currentSpineIndex);
   std::vector<std::unique_ptr<Page>> pages;
@@ -513,8 +546,40 @@ bool EpubReaderActivity::startClipSelection(const int initialX, const int initia
     requestUpdate();
     return false;
   }
+  // A confirmed clip absorbs the clippings it COVERS on the loaded pages, so an
+  // overlapping highlight ends up as one clipping rather than two. A partial
+  // overlap is widened into a cover first; one whose far end is off the loaded
+  // pages is left alone. Only anchored clippings in this spine item can be
+  // compared by offset.
+  if (mode == ClipSelectionActivity::Mode::Clip && CLIPPINGS.hasClippings()) {
+    size_t anchored = 0;
+    for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
+      const Clipping* stored = CLIPPINGS.clippingAt(i);
+      if (!stored || stored->spineIndex != spineIndex) continue;
+      if (stored->startOffset == UINT32_MAX || stored->endOffset == UINT32_MAX) continue;
+      ++anchored;
+    }
+    if (anchored) {
+      std::vector<ClipSelectionActivity::MergeRange> ranges;
+      // Counted first so this is one exact allocation. -fno-exceptions: a
+      // doubling growth that cannot allocate aborts, and this runs immediately
+      // before the activity's own contiguous word array.
+      ranges.reserve(anchored);
+      for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
+        const Clipping* stored = CLIPPINGS.clippingAt(i);
+        if (!stored || stored->spineIndex != spineIndex) continue;
+        if (stored->startOffset == UINT32_MAX || stored->endOffset == UINT32_MAX) continue;
+        ranges.push_back({stored->startOffset, stored->endOffset});
+      }
+      activity->enableMerge(std::move(ranges));
+    }
+  }
+  if (editStartOffset != UINT32_MAX && editEndOffset != UINT32_MAX) {
+    activity->setInitialRange({editStartOffset, editEndOffset});
+  }
   startActivityForResult(std::move(activity), [this, spineIndex, pageNumber, pageCount, layoutSignature,
-                                               bookTitle = std::move(bookTitle), author = std::move(author),
+                                               editStartOffset, editEndOffset, bookTitle = std::move(bookTitle),
+                                               author = std::move(author),
                                                chapterTitle = std::move(chapterTitle)](const ActivityResult& result) {
     if (result.isCancelled) {
       // A cancelled selection may still hold the long-press contact handed to
@@ -563,15 +628,37 @@ bool EpubReaderActivity::startClipSelection(const int initialX, const int initia
         section ? section->getParagraphIndexForPage(startPage).value_or(UINT16_MAX) : UINT16_MAX;
     const auto addResult = CLIPPINGS.addClipping(
         spineIndex, startPage, endPage, pageCount, clipping.startWordIndex, clipping.endWordIndex, clipping.wordCount,
-        chapterTitle.c_str(), paragraphIndex, clipping.text, layoutSignature, clipping.startOffset, clipping.endOffset);
+        chapterTitle.c_str(), paragraphIndex, clipping.text, layoutSignature, clipping.startOffset,
+        clipping.endOffset,
+        // Replace the edited clipping only if every one of its words was on the
+        // loaded pages. Otherwise this acts as an ordinary clip: the old one is
+        // kept whole and the store reports AlreadyCovered.
+        clipping.editRangeCovered ? editStartOffset : UINT32_MAX,
+        clipping.editRangeCovered ? editEndOffset : UINT32_MAX);
     bool exported = false;
     if (addResult == ClippingStore::AddResult::Added) {
       exported = ClippingsManager::saveClipping(bookTitle, author, chapterTitle, startPage + 1, clipping.text);
     }
-    clippingMessage = addResult == ClippingStore::AddResult::LimitReached ? StrId::STR_CLIPPING_LIMIT_REACHED
-                      : exported                                          ? StrId::STR_CLIPPING_SAVED
-                      : addResult == ClippingStore::AddResult::Added      ? StrId::STR_CLIPPING_EXPORT_FAILED
-                                                                          : StrId::STR_CLIPPING_FAILED;
+    // AlreadyCovered: these words are inside a clipping that already exists, so
+    // the store kept that one and wrote nothing. Report success, because the
+    // passage IS clipped -- and do not export, because the export file already
+    // holds this text as part of the larger clipping.
+    // AlreadyCovered after an EDIT means the edit did not take: the new range
+    // sits inside the clipping it came from and that one was kept. Saying
+    // "saved" there would claim a change that did not happen.
+    // LimitReached is included because an edit is net-zero -- one clipping in,
+    // one out -- so a full book is not really what stopped it. The cap is
+    // checked before anything is absorbed, by design, and cannot know that.
+    // Either way nothing changed, which is what the message says.
+    const bool declinedEdit = editStartOffset != UINT32_MAX &&
+                              (addResult == ClippingStore::AddResult::AlreadyCovered ||
+                               addResult == ClippingStore::AddResult::LimitReached);
+    clippingMessage = addResult == ClippingStore::AddResult::LimitReached  ? StrId::STR_CLIPPING_LIMIT_REACHED
+                      : declinedEdit                                      ? StrId::STR_CLIPPING_UNCHANGED
+                      : addResult == ClippingStore::AddResult::AlreadyCovered ? StrId::STR_CLIPPING_SAVED
+                      : exported                                             ? StrId::STR_CLIPPING_SAVED
+                      : addResult == ClippingStore::AddResult::Added         ? StrId::STR_CLIPPING_EXPORT_FAILED
+                                                                             : StrId::STR_CLIPPING_FAILED;
     showClippingMessage = true;
     clippingMessageTime = millis();
     requestUpdate();
@@ -918,6 +1005,43 @@ void EpubReaderActivity::loop() {
       if (link) {
         navigateToHref(link->href, true);
         haptic_feedback::touchAction();
+        return;
+      }
+    }
+  }
+
+  // A tap on a highlight re-opens it for editing, with its words selected.
+  // Same priority as the link block above and for the same reason: returning
+  // here is what keeps the tap from also turning the page. Long press still
+  // deletes (see startClipSelection).
+  if (!atEndOfBook && SETTINGS.touchReaderControls && CLIPPINGS.hasClippings() && mappedInput.hasTouch()) {
+    int touchX = 0;
+    int touchY = 0;
+    if (mappedInput.wasScreenTapped(touchX, touchY)) {
+      const int tapped = clippingIndexAtScreenPoint(touchX, touchY);
+      const Clipping* stored = tapped >= 0 ? CLIPPINGS.clippingAt(static_cast<size_t>(tapped)) : nullptr;
+      // Only an anchored clipping can be reopened: without offsets there is no
+      // layout-independent way to find its words again.
+      if (stored && stored->startOffset != UINT32_MAX && stored->endOffset != UINT32_MAX) {
+        haptic_feedback::touchAction();
+        // Resolve the start page from the SOURCE OFFSET, which survives a change
+        // of font, spacing, margins or orientation. Trusting stored->startPage
+        // instead would need the book's page count to still match, so any of
+        // those changes would silently drop the reach back to zero and make
+        // every multi-page highlight un-editable -- in the one path source
+        // offsets exist to keep layout-independent. applyProgressChange and the
+        // offset-jump path already resolve a position this way.
+        int editStartPage = -1;
+        if (const auto offsetPage = section->getPageForVisibleTextOffset(stored->startOffset)) {
+          editStartPage = static_cast<int>(*offsetPage);
+        } else if (clippingStoredRangeMatchesLayout(*stored, static_cast<uint16_t>(section->pageCount),
+                                                    readerRenderSpecSignature(SETTINGS.readerRenderSpec(
+                                                        buildViewportWidth, buildViewportHeight)))) {
+          // Fallback only: the stored ordinal means nothing outside its own layout.
+          editStartPage = static_cast<int>(stored->startPage);
+        }
+        startClipSelection(-1, -1, ClipSelectionActivity::Mode::Clip, stored->startOffset, stored->endOffset,
+                           editStartPage);
         return;
       }
     }
@@ -2353,10 +2477,7 @@ void EpubReaderActivity::drawClippingHighlights(const Page& page, const int font
     return;
   }
 
-  size_t chapterClippings = 0;
-  for (size_t i = 0; i < CLIPPINGS.clippingCount(); ++i) {
-    if (CLIPPINGS.clippingAt(i)->spineIndex == currentSpineIndex) ++chapterClippings;
-  }
+  const size_t chapterClippings = chapterClippingCount();
   if (!chapterClippings) return;
 
   const auto started = millis();

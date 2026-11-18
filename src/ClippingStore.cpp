@@ -183,13 +183,65 @@ void ClippingStore::unload() {
   dirty = false;
 }
 
+std::vector<size_t> ClippingStore::overlappingClippings(const uint16_t spineIndex, const uint32_t startOffset,
+                                                        const uint32_t endOffset, bool& containedByExisting,
+                                                        const uint32_t replaceStartOffset,
+                                                        const uint32_t replaceEndOffset) const {
+  containedByExisting = false;
+  std::vector<size_t> hits;
+  // An unanchored clipping has no comparable position: UINT32_MAX is "unknown",
+  // not a huge offset, so it must never take part in a range comparison.
+  if (!loaded || startOffset == UINT32_MAX || endOffset == UINT32_MAX) return hits;
+
+  // -fno-exceptions: a growth that cannot allocate aborts rather than
+  // returning. A highlight absorbs a handful of clippings in practice, so this
+  // is the whole allocation in the normal case. Placed after the early returns
+  // so an unanchored or unloaded add allocates nothing at all.
+  hits.reserve(4);
+  for (size_t i = clippingSize; i > 0; --i) {
+    const Clipping& other = clippingRef(i - 1);
+    if (other.spineIndex != spineIndex) continue;
+    if (other.startOffset == UINT32_MAX || other.endOffset == UINT32_MAX) continue;
+    // The clipping being edited goes regardless of which way the range moved:
+    // a shrink would otherwise look like a redundant re-clip of itself.
+    if (replaceStartOffset != UINT32_MAX && other.startOffset == replaceStartOffset &&
+        other.endOffset == replaceEndOffset) {
+      hits.push_back(i - 1);
+      continue;
+    }
+    const bool newContainsOther = startOffset <= other.startOffset && endOffset >= other.endOffset;
+    const bool otherContainsNew = other.startOffset <= startOffset && other.endOffset >= endOffset;
+    if (otherContainsNew && !newContainsOther) {
+      // Strictly larger: the new highlight adds nothing. Identical ranges fall
+      // to the branch below instead, so re-clipping the same words replaces
+      // rather than piling up.
+      containedByExisting = true;
+      hits.clear();
+      return hits;
+    }
+    if (newContainsOther) hits.push_back(i - 1);
+  }
+  return hits;
+}
+
 ClippingStore::AddResult ClippingStore::addClipping(const uint16_t spineIndex, const uint16_t startPage,
                                                     const uint16_t endPage, const uint16_t pageCount,
                                                     const uint16_t startWordIndex, const uint16_t endWordIndex,
                                                     const uint16_t wordCount, const char* chapterTitle,
                                                     const uint16_t paragraphIndex, const std::string& text,
                                                     const uint32_t layoutSignature, const uint32_t startOffset,
-                                                    const uint32_t endOffset) {
+                                                    const uint32_t endOffset, const uint32_t replaceStartOffset,
+                                                    const uint32_t replaceEndOffset) {
+  // Work out what this clipping would absorb, without touching anything yet.
+  bool containedByExisting = false;
+  const std::vector<size_t> absorbed = overlappingClippings(spineIndex, startOffset, endOffset, containedByExisting,
+                                                            replaceStartOffset, replaceEndOffset);
+  if (containedByExisting) return AddResult::AlreadyCovered;
+
+  // ABSORBING IS IRREVERSIBLE: removeClippingAt flushes the clipping's id to
+  // the sync deletion journal and rewrites the store, so every other device
+  // deletes it too. Nothing may be absorbed until this add can no longer fail.
+  // applyRemote, below, already works this way; keep the two consistent.
   if (clippingSize >= CLIPPING_MAX_PER_BOOK) {
     LOG_ERR("CLIP", "Clipping limit (%u) reached", CLIPPING_MAX_PER_BOOK);
     return AddResult::LimitReached;
@@ -224,6 +276,19 @@ ClippingStore::AddResult ClippingStore::addClipping(const uint16_t spineIndex, c
     return AddResult::SaveFailed;
   }
   dirty = false;
+
+  // The new record is on disk, so absorbing can no longer lose anything. It was
+  // appended, so it sits above every absorbed index and those indices are still
+  // valid; highest first keeps the rest in place. A failure here leaves an
+  // un-merged duplicate, which is untidy but is not lost data, so the clipping
+  // the reader asked for has still been added.
+  for (const size_t index : absorbed) {
+    if (!removeClippingAt(index)) {
+      LOG_ERR("CLIP", "Added the clipping but could not absorb overlapping clipping %u",
+              static_cast<unsigned>(index));
+      break;
+    }
+  }
   return AddResult::Added;
 }
 

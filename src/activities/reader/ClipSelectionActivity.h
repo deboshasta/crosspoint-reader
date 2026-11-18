@@ -19,6 +19,12 @@ class ClipSelectionActivity final : public Activity {
  public:
   enum class Mode : uint8_t { Clip, Lookup, DefinitionLookup };
 
+  // Source-offset range of an existing clipping in this spine item.
+  struct MergeRange {
+    uint32_t startOffset = 0;
+    uint32_t endOffset = 0;
+  };
+
   struct Selection {
     uint16_t firstPage = 0;
     uint16_t lastPage = 0;
@@ -36,6 +42,17 @@ class ClipSelectionActivity final : public Activity {
                         std::span<const std::unique_ptr<Page>> borrowedPages, int marginLeft, int marginTop,
                         Selection selection, int initialX = -1, int initialY = -1);
 
+  // Opt in to swallowing existing clippings this selection overlaps. The
+  // caller owns which ranges qualify (same spine item, anchored).
+  void enableMerge(std::vector<MergeRange> ranges) { mergeRanges = std::move(ranges); }
+  // Open with an existing clipping's words already selected, so a tap on a
+  // highlight can be adjusted. Resolved against word source offsets, not
+  // the clipping's stored page/word indices, which only hold under the
+  // layout they were captured in.
+  void setInitialRange(const MergeRange range) {
+    initialRange = range;
+    hasInitialRange = true;
+  }
   void onEnter() override;
   void loop() override;
   void render(RenderLock&&) override;
@@ -101,6 +118,19 @@ class ClipSelectionActivity final : public Activity {
   std::vector<std::unique_ptr<Page>> pages;
   std::span<const std::unique_ptr<Page>> borrowedPages;
   Selection initialSelection;
+  // Ranges a confirmed clip should swallow if it touches them, so an
+  // overlapping highlight becomes one clipping rather than two. Empty
+  // unless the caller opts in.
+  std::vector<MergeRange> mergeRanges;
+  MergeRange initialRange;
+  bool hasInitialRange = false;
+  // Whether initialRange's whole extent was found among the loaded words.
+  bool initialRangeCovered = false;
+  // Grows [first, last] to cover any mergeRange the selection overlaps.
+  // Returns false when nothing moved.
+  bool widenToMergeRanges(int& first, int& last) const;
+  // Source range of words[first..last], or false if any word is unanchored.
+  bool selectionOffsets(int first, int last, uint32_t& startOffset, uint32_t& endOffset) const;
   const int marginLeft;
   const int marginTop;
   const int initialX;

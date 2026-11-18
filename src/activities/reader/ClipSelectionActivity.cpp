@@ -106,7 +106,48 @@ void ClipSelectionActivity::onEnter() {
         selected = static_cast<int>(i);
     }
   }
-  currentPageOffset = words[selected].pageOffset;
+  int openOnWord = -1;
+  if (hasInitialRange) {
+    // Widest word span the range touches. A clipping may extend past the
+    // loaded page window, in which case this selects the part that is here --
+    // better than refusing to open the editor at all.
+    int firstHit = -1;
+    int lastHit = -1;
+    uint32_t coveredStart = UINT32_MAX;
+    uint32_t coveredEnd = 0;
+    for (size_t i = 0; i < wordCount; ++i) {
+      const WordBox& word = words[i];
+      if (word.startOffset == UINT32_MAX || word.endOffset == UINT32_MAX) continue;
+      if (word.endOffset <= initialRange.startOffset || word.startOffset >= initialRange.endOffset) continue;
+      if (firstHit < 0) firstHit = static_cast<int>(i);
+      lastHit = static_cast<int>(i);
+      coveredStart = std::min(coveredStart, word.startOffset);
+      coveredEnd = std::max(coveredEnd, word.endOffset);
+    }
+    if (firstHit >= 0) {
+      // Conventional order, matching the long-press path and the handle code:
+      // rangeStart is the anchor, `selected` is the end the keys and handles
+      // move. Which page opens is decided separately, below.
+      rangeStart = firstHit;
+      selected = lastHit;
+      openOnWord = firstHit;
+      // The page window runs forwards from the current page, so a clipping that
+      // began earlier arrives with only its tail loaded. Say so: the reader
+      // must not replace a clipping whose start is off screen.
+      initialRangeCovered = coveredStart <= initialRange.startOffset && coveredEnd >= initialRange.endOffset;
+      if (!initialRangeCovered) {
+        LOG_DBG("CLIP", "Editing a clipping that extends past the loaded pages; it will not be replaced");
+      }
+    } else {
+      LOG_ERR("CLIP", "Clipping to edit has no words on the loaded pages");
+    }
+  }
+  // Open on the START of a reopened clipping. Using `selected` would land a
+  // reader who tapped a highlight spanning a page break on the NEXT page, with
+  // the start handle off screen and no way to adjust it without paging back.
+  currentPageOffset = words[openOnWord >= 0 ? openOnWord : selected].pageOffset;
+  // initialX overrides any pre-selection: the reader passes coordinates for a
+  // long press (select that word) and none for an edit (keep the range above).
   if (initialX >= 0) {
     const int hit = wordAt(initialX, initialY);
     if (hit < 0) {
@@ -409,6 +450,69 @@ bool ClipSelectionActivity::buildSelectedText(const int first, const int last, s
   return true;
 }
 
+bool ClipSelectionActivity::selectionOffsets(const int first, const int last, uint32_t& startOffset,
+                                             uint32_t& endOffset) const {
+  startOffset = UINT32_MAX;
+  endOffset = 0;
+  for (int i = first; i <= last; ++i) {
+    // UINT32_MAX is "source position unknown", not a huge offset, so one
+    // unanchored word makes the whole range incomparable.
+    if (words[i].startOffset == UINT32_MAX || words[i].endOffset == UINT32_MAX) return false;
+    startOffset = std::min(startOffset, words[i].startOffset);
+    endOffset = std::max(endOffset, words[i].endOffset);
+  }
+  return startOffset != UINT32_MAX;
+}
+
+bool ClipSelectionActivity::widenToMergeRanges(int& first, int& last) const {
+  uint32_t selStart = 0;
+  uint32_t selEnd = 0;
+  if (!selectionOffsets(first, last, selStart, selEnd)) return false;
+
+  bool moved = false;
+  for (const MergeRange& range : mergeRanges) {
+    // Never widen back onto the clipping being edited. It is in this list like
+    // any other, so without this a selection dragged inward is restored to the
+    // original extent and no edit could ever remove a word.
+    if (hasInitialRange && range.startOffset == initialRange.startOffset &&
+        range.endOffset == initialRange.endOffset) {
+      continue;
+    }
+    // Half-open comparison: a clipping that merely ends where this one starts
+    // is adjacent, not overlapping, and stays its own clipping.
+    if (range.endOffset <= selStart || range.startOffset >= selEnd) continue;
+
+    int firstHit = -1;
+    int lastHit = -1;
+    uint32_t coveredStart = UINT32_MAX;
+    uint32_t coveredEnd = 0;
+    for (size_t i = 0; i < wordCount; ++i) {
+      const WordBox& word = words[i];
+      if (word.startOffset == UINT32_MAX || word.endOffset == UINT32_MAX) continue;
+      if (word.endOffset <= range.startOffset || word.startOffset >= range.endOffset) continue;
+      if (firstHit < 0) firstHit = static_cast<int>(i);
+      lastHit = static_cast<int>(i);
+      coveredStart = std::min(coveredStart, word.startOffset);
+      coveredEnd = std::max(coveredEnd, word.endOffset);
+    }
+    // Only swallow a clipping whose whole extent is in the loaded page window.
+    // Otherwise the widened selection would hold fewer words than the range it
+    // claims, and the stored text would understate the clipping -- worse than
+    // leaving two honest clippings.
+    if (firstHit < 0 || coveredStart > range.startOffset || coveredEnd < range.endOffset) continue;
+
+    if (firstHit < first) {
+      first = firstHit;
+      moved = true;
+    }
+    if (lastHit > last) {
+      last = lastHit;
+      moved = true;
+    }
+  }
+  return moved;
+}
+
 void ClipSelectionActivity::confirmSelection(const ClippingResult::Action action) {
   if (rangeStart < 0) {
     rangeStart = selected;
@@ -416,15 +520,31 @@ void ClipSelectionActivity::confirmSelection(const ClippingResult::Action action
     return;
   }
 
-  const int first = std::min(rangeStart, selected);
-  const int last = std::max(rangeStart, selected);
+  int first = std::min(rangeStart, selected);
+  int last = std::max(rangeStart, selected);
+  // Only a clip consolidates: a lookup or a bookmark is about the words the
+  // reader actually picked, and must not be silently widened.
+  const int pickedFirst = first;
+  const int pickedLast = last;
+  const bool widened = action == ClippingResult::Action::Clip && widenToMergeRanges(first, last);
   ClippingResult result;
   result.action = action;
+  result.editRangeCovered = initialRangeCovered;
   const auto heap = HalMemory::getDefaultHeap();
   // reserve() aborts on OOM; leave room for the sort order and error popup too.
   const size_t requiredHeap = CLIPPING_TEXT_MAX + 1 + (last - first + 1) * sizeof(uint16_t) + 1024;
   const bool lowMemory = heap.largestBlockBytes < CLIPPING_TEXT_MAX + 1 || heap.freeBytes < requiredHeap;
-  if (lowMemory || !buildSelectedText(first, last, result.text)) {
+  bool built = !lowMemory && buildSelectedText(first, last, result.text);
+  if (!built && widened) {
+    // The union does not fit (CLIPPING_TEXT_MAX) or would not build. Keep the
+    // words actually selected rather than failing the clip outright; the
+    // overlapping clipping simply stays separate.
+    LOG_DBG("CLIP", "Merged selection would not build; keeping the picked range");
+    first = pickedFirst;
+    last = pickedLast;
+    built = !lowMemory && buildSelectedText(first, last, result.text);
+  }
+  if (!built) {
     static constexpr StrId OPTIONS[] = {StrId::STR_BACK};
     actionPopup.show(lowMemory ? StrId::STR_MEMORY_ERROR : StrId::STR_CLIPPING_TOO_LONG, OPTIONS, 1, 0, [](int) {});
     requestUpdate();
@@ -435,15 +555,8 @@ void ClipSelectionActivity::confirmSelection(const ClippingResult::Action action
   result.startWordIndex = words[first].pageWordIndex;
   result.endWordIndex = words[last].pageWordIndex;
   result.wordCount = static_cast<uint16_t>(last - first + 1);
-  result.startOffset = UINT32_MAX;
-  result.endOffset = 0;
-  for (int i = first; i <= last; ++i) {
-    if (words[i].startOffset == UINT32_MAX || words[i].endOffset == UINT32_MAX) {
-      result.startOffset = result.endOffset = UINT32_MAX;
-      break;
-    }
-    result.startOffset = std::min(result.startOffset, words[i].startOffset);
-    result.endOffset = std::max(result.endOffset, words[i].endOffset);
+  if (!selectionOffsets(first, last, result.startOffset, result.endOffset)) {
+    result.startOffset = result.endOffset = UINT32_MAX;
   }
   setResult(std::move(result));
   finish();

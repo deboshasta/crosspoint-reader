@@ -200,7 +200,14 @@ class EpubReaderActivity final : public ReaderActivity {
   void openDictionaryWordSelect();
   // True once a selection activity has started and owns any live contact.
   bool startClipSelection(int initialX = -1, int initialY = -1,
-                          ClipSelectionActivity::Mode mode = ClipSelectionActivity::Mode::Clip);
+                          ClipSelectionActivity::Mode mode = ClipSelectionActivity::Mode::Clip,
+                          uint32_t editStartOffset = UINT32_MAX, uint32_t editEndOffset = UINT32_MAX,
+                          int editStartPage = -1);
+  // Clippings stored in the chapter on screen. Cheap: no page or text is read.
+  size_t chapterClippingCount() const;
+  // Index of the clipping under a screen point on the current page, or -1.
+  // Loads the page, so it is only called once a tap has landed.
+  int clippingIndexAtScreenPoint(int x, int y);
   int clippingAtPoint(const Page& page, int x, int y) const;
   void openClippings();
   void applyProgressChange(const ProgressChangeResult& progress);

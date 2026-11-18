@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #if defined(ARDUINO_ARCH_ESP32)
 #include <sdkconfig.h>
@@ -46,6 +47,12 @@ class ClippingStore {
  public:
   enum class AddResult : uint8_t {
     Added,
+    // The new range sat strictly inside a clipping that already exists, so
+    // nothing was stored. For a plain re-clip the passage IS clipped, so the
+    // caller reports success; for an edit it means the edit did not take, and
+    // the caller says so instead. Either way it must NOT export again, or the
+    // export file gains a duplicate.
+    AlreadyCovered,
     LimitReached,
     SaveFailed,
   };
@@ -59,8 +66,21 @@ class ClippingStore {
   AddResult addClipping(uint16_t spineIndex, uint16_t startPage, uint16_t endPage, uint16_t pageCount,
                         uint16_t startWordIndex, uint16_t endWordIndex, uint16_t wordCount, const char* chapterTitle,
                         uint16_t paragraphIndex, const std::string& text, uint32_t layoutSignature,
-                        uint32_t startOffset = UINT32_MAX, uint32_t endOffset = UINT32_MAX);
+                        uint32_t startOffset = UINT32_MAX, uint32_t endOffset = UINT32_MAX,
+                        // The range of a clipping this one replaces (an edit). Always
+                        // absorbed, even when the new range is smaller, so shrinking an
+                        // existing clipping is not mistaken for a redundant re-clip.
+                        uint32_t replaceStartOffset = UINT32_MAX, uint32_t replaceEndOffset = UINT32_MAX);
   bool removeClippingAt(size_t index);
+  // Indices of stored clippings in the same spine item that are CONTAINED BY
+  // [startOffset, endOffset], highest index first, so a caller can remove them
+  // without invalidating the ones still to come. Empty unless both ends are
+  // anchored. A clipping that CONTAINS the range is never returned: that sets
+  // containedByExisting and clears the result, because the passage is already
+  // clipped and the larger clipping must survive.
+  std::vector<size_t> overlappingClippings(uint16_t spineIndex, uint32_t startOffset, uint32_t endOffset,
+                                           bool& containedByExisting, uint32_t replaceStartOffset = UINT32_MAX,
+                                           uint32_t replaceEndOffset = UINT32_MAX) const;
   bool saveToFile();
   bool prepareSync();
   bool finishUploads();
@@ -87,6 +107,9 @@ class ClippingStore {
   std::array<std::unique_ptr<Clipping[]>, (CLIPPING_MAX_PER_BOOK + CLIPPINGS_PER_BLOCK - 1) / CLIPPINGS_PER_BLOCK>
       clippingBlocks;
   Clipping& clippingRef(size_t index) {
+    return clippingBlocks[index / CLIPPINGS_PER_BLOCK][index % CLIPPINGS_PER_BLOCK];
+  }
+  const Clipping& clippingRef(size_t index) const {
     return clippingBlocks[index / CLIPPINGS_PER_BLOCK][index % CLIPPINGS_PER_BLOCK];
   }
   size_t clippingSize = 0;

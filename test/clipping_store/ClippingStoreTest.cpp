@@ -4,8 +4,19 @@
 
 namespace {
 using Result = ClippingStore::AddResult;
+Result addAt(ClippingStore& store, uint32_t startOffset, uint32_t endOffset, const std::string& text = "one",
+             const char* title = "Chapter", uint32_t replaceStartOffset = UINT32_MAX,
+             uint32_t replaceEndOffset = UINT32_MAX) {
+  return store.addClipping(0, 0, 0, 1, 0, 0, 1, title, 0, text, 1, startOffset, endOffset, replaceStartOffset,
+                           replaceEndOffset);
+}
+// Every call gets its own non-overlapping range. Two clippings over identical
+// offsets are the same passage, which addClipping now consolidates into one --
+// correct, but not what the tests below are about, so they must not collide.
+unsigned addSeq = 0;
 Result add(ClippingStore& store, const std::string& text = "one", const char* title = "Chapter") {
-  return store.addClipping(0, 0, 0, 1, 0, 0, 1, title, 0, text, 1, 0, 3);
+  const uint32_t start = addSeq++ * 4;
+  return addAt(store, start, start + 3, text, title);
 }
 std::string storePath() {
   for (const auto& [path, node] : fake::files)
@@ -280,4 +291,149 @@ TEST(ClippingStore, MoveRefusesExistingDestinationHistoryAndDeleteCleansSidecars
   EXPECT_FALSE(Storage.exists((path + ".deleted").c_str()));
   EXPECT_FALSE(Storage.exists((path + ".bak").c_str()));
   EXPECT_FALSE(Storage.exists((path + ".tmp").c_str()));
+}
+
+TEST(ClippingStore, OverlappingClippingsConsolidateIntoOne) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  // "2" and "4" clipped separately, then "1 2 3 4" over both: one clipping.
+  ASSERT_EQ(addAt(store, 2, 3, "2"), Result::Added);
+  ASSERT_EQ(addAt(store, 6, 7, "4"), Result::Added);
+  ASSERT_EQ(store.clippingCount(), 2u);
+  ASSERT_EQ(addAt(store, 0, 8, "1 2 3 4"), Result::Added);
+  EXPECT_EQ(store.clippingCount(), 1u);
+  std::string text;
+  ASSERT_TRUE(store.readClippingText(0, text));
+  EXPECT_EQ(text, "1 2 3 4");
+}
+
+TEST(ClippingStore, ClippingInsideAnExistingOneIsNotStoredAgain) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  ASSERT_EQ(addAt(store, 0, 8, "1 2 3 4"), Result::Added);
+  // The passage is already clipped, so nothing is stored and the caller must
+  // not export it again.
+  EXPECT_EQ(addAt(store, 2, 3, "2"), Result::AlreadyCovered);
+  EXPECT_EQ(store.clippingCount(), 1u);
+  std::string text;
+  ASSERT_TRUE(store.readClippingText(0, text));
+  EXPECT_EQ(text, "1 2 3 4");
+}
+
+TEST(ClippingStore, EditingAClippingReplacesItEvenWhenShrunk) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  ASSERT_EQ(addAt(store, 0, 8, "1 2 3 4"), Result::Added);
+  // A shrunk edit sits inside the clipping it came from, so without naming the
+  // range it replaces it would be rejected as AlreadyCovered and lost.
+  ASSERT_EQ(addAt(store, 0, 4, "1 2", "Chapter", 0, 8), Result::Added);
+  EXPECT_EQ(store.clippingCount(), 1u);
+  std::string text;
+  ASSERT_TRUE(store.readClippingText(0, text));
+  EXPECT_EQ(text, "1 2");
+}
+
+TEST(ClippingStore, AdjacentClippingsStaySeparate) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  // Touching at a boundary is adjacency, not overlap.
+  ASSERT_EQ(addAt(store, 0, 4, "1 2"), Result::Added);
+  ASSERT_EQ(addAt(store, 4, 8, "3 4"), Result::Added);
+  EXPECT_EQ(store.clippingCount(), 2u);
+}
+
+TEST(ClippingStore, PartialOverlapIsLeftForTheSelectionToWiden) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  // The store absorbs containment only. ClipSelectionActivity widens a partial
+  // overlap into a containment before it reaches here, because the union's text
+  // exists in neither stored clipping. Two clippings is the honest outcome at
+  // this level; the merge happens a layer up.
+  ASSERT_EQ(addAt(store, 0, 5, "1 2"), Result::Added);
+  ASSERT_EQ(addAt(store, 3, 8, "2 3"), Result::Added);
+  EXPECT_EQ(store.clippingCount(), 2u);
+}
+
+TEST(ClippingStore, UnanchoredClippingsNeverConsolidate) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  // UINT32_MAX means "source position unknown", not a huge offset, so these
+  // cannot be compared and must both survive.
+  ASSERT_EQ(addAt(store, UINT32_MAX, UINT32_MAX, "one"), Result::Added);
+  ASSERT_EQ(addAt(store, UINT32_MAX, UINT32_MAX, "two"), Result::Added);
+  EXPECT_EQ(store.clippingCount(), 2u);
+}
+
+TEST(ClippingStore, FailedAbsorbingAddKeepsTheClippingsItWouldHaveSwallowed) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  ASSERT_EQ(addAt(store, 2, 3, "2"), Result::Added);
+  ASSERT_EQ(addAt(store, 6, 7, "4"), Result::Added);
+  ASSERT_EQ(store.clippingCount(), 2u);
+  // Absorbing is irreversible: it flushes each id to the sync deletion journal
+  // and rewrites the store. So the replacement must be durable first, and a
+  // write failure must leave both originals exactly where they were.
+  // NOTE: this covers the write-failure rollback, NOT the ordering. fake::fail
+  // is a one-shot countdown, so failWrite=1 aborts inside the first removal's
+  // own rewrite, which rolled itself back even before absorbing was moved after
+  // the write. OversizeTextIsRefusedBeforeAnythingIsAbsorbed is the test that
+  // actually discriminates.
+  fake::failWrite = 1;
+  EXPECT_EQ(addAt(store, 0, 8, "1 2 3 4"), Result::SaveFailed);
+  fake::failWrite = 0;
+  ASSERT_EQ(store.clippingCount(), 2u);
+  std::string text;
+  ASSERT_TRUE(store.readClippingText(0, text));
+  EXPECT_EQ(text, "2");
+  ASSERT_TRUE(store.readClippingText(1, text));
+  EXPECT_EQ(text, "4");
+  // Reloading proves the file on disk still holds both, not just memory.
+  store.unload();
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  EXPECT_EQ(store.clippingCount(), 2u);
+}
+
+TEST(ClippingStore, OversizeTextIsRefusedBeforeAnythingIsAbsorbed) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  ASSERT_EQ(addAt(store, 2, 3, "2"), Result::Added);
+  ASSERT_EQ(addAt(store, 6, 7, "4"), Result::Added);
+  // The ordering test. Text length is checked BEFORE the absorb loop, so this
+  // refusal costs nothing. When it was checked after, both clippings were
+  // already deleted and journalled for deletion on every synced device, and
+  // this returned SaveFailed with a count of 0.
+  EXPECT_EQ(addAt(store, 0, 8, std::string(CLIPPING_TEXT_MAX + 1, 'x')), Result::SaveFailed);
+  EXPECT_EQ(store.clippingCount(), 2u);
+  std::string text;
+  ASSERT_TRUE(store.readClippingText(0, text));
+  EXPECT_EQ(text, "2");
+  ASSERT_TRUE(store.readClippingText(1, text));
+  EXPECT_EQ(text, "4");
+}
+
+TEST(ClippingStore, AbsorbingIsRefusedAtTheLimitRatherThanMakingRoom) {
+  fake::reset();
+  ClippingStore store;
+  ASSERT_TRUE(store.loadForBook("/book.epub", "Book", "Author", "epub"));
+  // Taken BEFORE the loop so it is the first range the loop stores. addSeq is
+  // cumulative and fake::reset() does not clear it, so a hardcoded range would
+  // cover nothing when the suite runs in one process -- the cap would fire for
+  // the trivial reason and this would pass while asserting nothing.
+  const uint32_t base = addSeq * 4;
+  for (unsigned i = 0; i < CLIPPING_MAX_PER_BOOK; ++i) ASSERT_EQ(add(store), Result::Added);
+  ASSERT_EQ(store.clippingCount(), CLIPPING_MAX_PER_BOOK);
+  // A clipping covering stored ones could free slots by absorbing them, but
+  // only by destroying them before the replacement is known to be storable.
+  // Refusing is the honest answer; the reader reports the limit and the user
+  // deletes clippings from View Clippings.
+  EXPECT_EQ(addAt(store, base, base + 8, "1 2 3 4"), Result::LimitReached);
+  EXPECT_EQ(store.clippingCount(), CLIPPING_MAX_PER_BOOK);
 }
