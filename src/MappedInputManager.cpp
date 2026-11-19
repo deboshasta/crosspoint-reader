@@ -14,7 +14,7 @@
 
 namespace fui = freeink::ui;
 
-void MappedInputManager::update(const bool deferHomeButtonAction) const {
+void MappedInputManager::update(const bool deferHomeButtonAction, const bool sideDoubleTapEnabled) const {
   remoteInput.reset();
   gpio.update();
   const bool pagePressed =
@@ -49,6 +49,37 @@ void MappedInputManager::update(const bool deferHomeButtonAction) const {
       default:
         break;
     }
+  }
+  // Left side-button double-tap: a third producer of this one-frame channel,
+  // last so an explicit Home gesture or short power click always wins. Not
+  // academic: on the frame Power is released both this block's Power test and
+  // the one above are satisfiable, so the two can collide. The main loop
+  // supplies the policy (reader on page, the button's single action disabled,
+  // an action chosen); the Power test belongs here, where gpio was refreshed at
+  // the top. Decoding here rather than in the main loop is what keeps a release
+  // edge safe from its early returns.
+  if (sideDoubleTapEnabled && !gpio.isPressed(HalGPIO::BTN_POWER)) {
+    const uint8_t leftBtn = leftSideButton();
+    // `held` matters: HomeButtonInput latches secondContact on the second press
+    // and that disables its window-expiry branch, so without this a contact
+    // held past the window would still fire on release, however late. Feeding
+    // `held` takes the decoder's own reset branch and abandons the gesture
+    // instead. getHeldTime() is global across contacts rather than per button,
+    // so it can read true while some other button is down -- that abandons a
+    // double-tap rather than inventing one, which is the safe direction.
+    const bool heldPastWindow = gpio.isPressed(leftBtn) && gpio.getHeldTime() > HomeButtonInput::DOUBLE_TAP_MS;
+    // tap and longPress are Ignore: the button has no single action in this
+    // state, so there is no first-tap meaning and nothing is ever deferred.
+    const HomeButtonAction leftAction = leftSideInput.update(
+        millis(), gpio.wasReleased(leftBtn), heldPastWindow, false, gpio.isPressed(leftBtn), HomeButtonAction::Ignore,
+        static_cast<HomeButtonAction>(SETTINGS.sideButtonLeftDoubleTapAction), HomeButtonAction::Ignore);
+    // Always advance the decoder on real input so its state stays honest, but
+    // install only into a free channel.
+    if (homeAction == HomeButtonAction::Ignore) homeAction = leftAction;
+  } else {
+    // One reset path for every ineligible frame, so a half-finished tap can
+    // never pair with a release that arrives after the gate changed under it.
+    leftSideInput.reset();
   }
   if (deferHomeButtonAction) {
     // Keep the first action observed during a synchronous transfer. Home must
@@ -109,11 +140,11 @@ bool MappedInputManager::sideButtonFor(const uint8_t action, bool (HalGPIO::*fn)
   // "Left"/"Right" name sides of the screen as held, not GPIO contacts, so the
   // pair swaps in INVERTED / LANDSCAPE_CCW under the same orientation policy
   // the front page buttons and the rotated hint labels already follow. Added
-  // deliberately in 8cb0a390 (#3318) for issue #2964; do not drop it here
-  // without dropping it for the front buttons too.
-  const bool swapped = isNavDirectionSwapped();
-  const uint8_t leftPin = swapped ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP;
-  const uint8_t rightPin = swapped ? HalGPIO::BTN_UP : HalGPIO::BTN_DOWN;
+  // deliberately in 8cb0a390 (#3318) for issue #2964; the swap itself now lives
+  // in leftSideButton(), and must not be dropped there without dropping it for
+  // the front buttons too.
+  const uint8_t leftPin = leftSideButton();
+  const uint8_t rightPin = rightSideButton();
   bool hit = false;
   if (SETTINGS.sideButtonLeftAction == action) hit = (gpio.*fn)(leftPin);
   if (!hit && SETTINGS.sideButtonRightAction == action) hit = (gpio.*fn)(rightPin);
@@ -129,8 +160,16 @@ bool MappedInputManager::wasSideButtonActionReleased(const uint8_t action) const
   return sideButtonFor(action, &HalGPIO::wasReleased);
 }
 
-bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
+uint8_t MappedInputManager::leftSideButton() const {
+  return isNavDirectionSwapped() ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP;
+}
 
+uint8_t MappedInputManager::rightSideButton() const {
+  // Derived, so the orientation policy above stays the only place that decides.
+  return leftSideButton() == HalGPIO::BTN_UP ? HalGPIO::BTN_DOWN : HalGPIO::BTN_UP;
+}
+
+bool MappedInputManager::mapButton(const Button button, bool (HalGPIO::*fn)(uint8_t) const) const {
   switch (button) {
     case Button::Back:
       // Logical Back maps to user-configured front button.
@@ -395,6 +434,11 @@ bool MappedInputManager::wasPressed(const Button button) const {
   if ((button == Button::NavNext || button == Button::Right) && remoteInput.button == RemoteButton::Next) return true;
   if ((button == Button::NavPrevious || button == Button::Left) && remoteInput.button == RemoteButton::Previous)
     return true;
+  // Ungated on purpose, and it stays safe only because every producer of
+  // homeAction == Confirm is confined to home-key boards: the Home key itself,
+  // and the left side double-tap whose settings row is gated on hasHomeKey().
+  // Lift that gate and this synthesises a Confirm edge on boards that have
+  // never seen one.
   if (button == Button::Confirm && homeAction == HomeButtonAction::Confirm) return true;
   if (button == Button::Back && wasBackGesture()) return true;
 #if FREEINK_CAP_TOUCH

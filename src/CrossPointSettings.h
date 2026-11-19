@@ -331,6 +331,11 @@ class CrossPointSettings : public PersistableStore<CrossPointSettings> {
   uint8_t sideButtonLayout = PREV_NEXT;
   uint8_t sideButtonLeftAction = SIDE_PREV;
   uint8_t sideButtonRightAction = SIDE_NEXT;
+  // Left side-button double-tap while reading; a HomeButtonAction index, shared
+  // with the Home key's gestures. Offered only on home-key boards (the emit in
+  // SettingsList.cpp) and only while sideButtonLeftAction is
+  // SIDE_ACTION_DISABLED (showOnDevice()).
+  uint8_t sideButtonLeftDoubleTapAction = static_cast<uint8_t>(HomeButtonAction::Ignore);
   uint8_t frontButtonFollowOrientation = 0;
   // Front button remap (logical -> hardware)
   // Used by MappedInputManager to translate logical buttons into physical front buttons.

@@ -887,13 +887,42 @@ static bool sideButtonSleepRequested() {
   return released;
 }
 
+// Policy for the left side-button double-tap; MappedInputManager::update() owns
+// the decode. showOnDevice() carries why it is bound to the disabled state.
+//
+// The Ignore test is also what keeps the gesture off non-home-key boards: the
+// settings row is not emitted there, so nothing can write the field and it
+// keeps its Ignore default. Emit it unconditionally again and this gate stops
+// covering that.
+//
+// Reader-on-page is the gate sideButtonSleepRequested() uses, and it is
+// load-bearing: outside the reader, and inside its overlays, that button still
+// moves through lists via Button::Up/Down whatever this setting says, so
+// without it the action would fire on top of that navigation.
+static bool leftSideDoubleTapEligible() {
+  const uint8_t raw = SETTINGS.sideButtonLeftDoubleTapAction;
+  if (raw >= static_cast<uint8_t>(HomeButtonAction::Count) ||
+      static_cast<HomeButtonAction>(raw) == HomeButtonAction::Ignore ||
+      SETTINGS.sideButtonLeftAction != CrossPointSettings::SIDE_ACTION_DISABLED) {
+    return false;
+  }
+  // A screenshot combination that ended with Power released first still
+  // delivers the side button's own release afterwards, with Power already up --
+  // the edge sideButtonSleepRequested() drops for the same reason. It owns
+  // clearing the flag; this only refuses to build a tap on it.
+  if (ignoreSideButtonReleaseAfterCombo) return false;
+  return activityManager.isForegroundReaderOnPage();
+}
+
 void loop() {
   static unsigned long maxLoopDuration = 0;
   const unsigned long loopStartTime = millis();
   static unsigned long lastMemPrint = 0;
 
   gpio.setSharedConfirmPowerShortPressEmitsPower(SETTINGS.shortPwrBtn == CrossPointSettings::SHORT_PWRBTN::SLEEP);
-  mappedInputManager.update();
+  // Computed here and passed in: the activity state this reads cannot change
+  // before update() consumes it, and update() refreshes gpio itself.
+  mappedInputManager.update(false, leftSideDoubleTapEligible());
 
   // Bluetooth page turner, before the USB drive's early return: a card handed to USB stops the radio
   // before anything else.

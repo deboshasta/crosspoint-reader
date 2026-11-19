@@ -144,6 +144,18 @@ void forEachBaseSetting(SettingVisitor visit, void* context) {
   emit(SettingInfo::Enum(StrId::STR_SIDE_BTN_RIGHT, &CrossPointSettings::sideButtonRightAction,
                          {StrId::STR_PREV, StrId::STR_NEXT, StrId::STR_DISABLED, StrId::STR_SLEEP},
                          "sideButtonRightAction", StrId::STR_CAT_CONTROLS));
+  // Home-key boards only, like the three Home-gesture rows below, which share
+  // this action list. A product decision rather than a hard constraint: only
+  // HomeButtonAction::Home is actually unreachable without a home key
+  // (wasHomeGesture), but it is the picker's first option, and confining the
+  // list to the boards that already offer it keeps one audience for it.
+  // Gating the EMIT is safe because hasHomeKey() is a board condition, fixed
+  // before settings load; the per-value rule lives in showOnDevice() instead,
+  // which hides the row while the left button has its own single action.
+  if (BoardConfig::hasHomeKey()) {
+    emit(SettingInfo::StaticEnum(StrId::STR_SIDE_BTN_LEFT_DBL, &CrossPointSettings::sideButtonLeftDoubleTapAction,
+                                 home_button::ACTION_LABELS, "sideButtonLeftDoubleTapAction", StrId::STR_CAT_CONTROLS));
+  }
 #if FREEINK_DEVICE_PICCO
   emit(SettingInfo::Enum(StrId::STR_SLIDE_SWITCH, &CrossPointSettings::slideSwitchAction,
                          {StrId::STR_FRONTLIGHT, StrId::STR_NIGHT_MODE, StrId::STR_TOUCH_READER_CONTROLS},

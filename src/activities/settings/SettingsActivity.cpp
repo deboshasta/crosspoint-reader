@@ -61,6 +61,15 @@ bool showOnDevice(const SettingInfo& setting) {
       SETTINGS.shortPwrBtn != CrossPointSettings::SHORT_PWRBTN::FOOTNOTES) {
     return false;
   }
+  // A left double-tap is only offered while that button has no single action of
+  // its own: otherwise the first tap would have to be withheld to see whether a
+  // second was coming, which would delay page turns on it. Device-only, so the
+  // chosen action survives being hidden and the web API can still set both
+  // values in one request.
+  if (setting.valuePtr == &CrossPointSettings::sideButtonLeftDoubleTapAction &&
+      SETTINGS.sideButtonLeftAction != CrossPointSettings::SIDE_ACTION_DISABLED) {
+    return false;
+  }
   return true;
 }
 

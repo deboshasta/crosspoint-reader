@@ -45,7 +45,15 @@ class MappedInputManager {
   // Blocking transfer loops pump physical input themselves. Defer configured
   // Home-key actions so the next main-loop pass can dispatch them, while the
   // current action remains available for immediate Home cancellation.
-  void update(bool deferHomeButtonAction = false) const;
+  // sideDoubleTapEnabled: whether a left side-button double-tap may be decoded
+  // this pass. A parameter rather than stored state because update() has six
+  // callers -- this loop plus five blocking transfer pumps -- and the value is
+  // known on the line above the call, so the pumps default to off instead of
+  // inheriting the main loop's last value. The main loop owns the policy
+  // because it needs the activity state, which this class cannot ask for
+  // without a cycle; the decode is here so no early return can swallow a
+  // release edge.
+  void update(bool deferHomeButtonAction = false, bool sideDoubleTapEnabled = false) const;
 #if FREEINK_CAP_TOUCH
   // X4 Pro delays a single power click until its frontlight double-click window
   // expires. The main loop supplies that one-frame event here.
@@ -111,6 +119,10 @@ class MappedInputManager {
   HomeButtonAction homeButtonAction() const { return homeAction; }
   void resetHomeButtonInput() const {
     homeButtonInput.reset();
+    // The side decoder is a sibling of the same type: clearing one and not the
+    // other would leave the class inconsistent. update()'s ineligible branch
+    // covers it in practice, so this is for the reader, not for a live bug.
+    leftSideInput.reset();
     deferredHomeAction = HomeButtonAction::Ignore;
   }
   bool wasMenuGesture() const;
@@ -152,6 +164,12 @@ class MappedInputManager {
   // buttons may carry the same action, and which contact is "Left" follows the
   // orientation policy.
   bool sideButtonFor(uint8_t action, bool (HalGPIO::*fn)(uint8_t) const) const;
+  // Which contact is "Left"/"Right" under the live orientation policy, as a
+  // BUTTON index (HalGPIO::BTN_*), not a GPIO pin. Shared so page turns and the
+  // left double-tap can never disagree about it; the swap itself lives in
+  // leftSideButton() alone.
+  uint8_t leftSideButton() const;
+  uint8_t rightSideButton() const;
   // SDK edge classification (fui::edgeSwipe) + the shared decode/held-time
   // bookkeeping; the wrappers below give each edge its board meaning.
   bool wasEdgeSwipe(freeink::ui::ScreenEdge edge) const;
@@ -167,6 +185,9 @@ class MappedInputManager {
 
   mutable RemoteButtonInput remoteInput;
   mutable HomeButtonInput homeButtonInput;
+  // Same decoder as the Home key, on the left side contact. Its tap and
+  // long-press actions are always Ignore, so only the double tap resolves.
+  mutable HomeButtonInput leftSideInput;
   mutable HomeButtonAction homeAction = HomeButtonAction::Ignore;
   mutable HomeButtonAction deferredHomeAction = HomeButtonAction::Ignore;
   mutable bool touchHeldOverrideValid = false;

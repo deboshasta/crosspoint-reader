@@ -314,6 +314,8 @@ Settings are grouped into **System**, **Display**, **Reader**, **Controls**, **L
 
 - **Left Side Button (Reader)** and **Right Side Button (Reader)**: Set what each side button does while reading, independently of the other: "Prev", "Next", "Disabled" or "Sleep". The defaults are Prev on the left and Next on the right, and both buttons may be given the same action. "Left" and "Right" mean the sides as you are holding the device, so they follow the reading orientation. These settings apply only while reading: elsewhere the side buttons always move through lists, so a button set to "Disabled" or "Sleep" still navigates menus, the clippings list and selection.
 
+- **Left Double Tap (Reader)** (home key devices only): Press the left side button twice quickly while reading to run an action of your choice, from the same list the home key gestures use. The default is "Ignore", so nothing happens until you pick one. The row appears in the device's Controls list only while **Left Side Button (Reader)** is set to "Disabled", because a button that is already turning pages cannot also wait to see whether a second press is coming. Like the other side button settings it applies while reading only, and your chosen action is remembered if you later give that button a single-press action again.
+
 - **Long-press Chapter Skip**: Set whether long-pressing page turn buttons skips to the next/previous chapter:
   
   - "Chapter Skip" (default) - Long-pressing skips to next/previous chapter
@@ -644,7 +646,7 @@ Once you have opened a book, the button layout changes to facilitate reading.
 | **Previous Page** | Press **Left** _or_ **Side Up**    |
 | **Next Page**     | Press **Right** _or_ **Side Down** |
 
-Each side button's role can be set independently in the **[Controls Settings](#363-controls)**, including turning one off or using it to put the device to sleep.
+Each side button's role can be set independently in the **[Controls Settings](#363-controls)**, including turning one off or using it to put the device to sleep. With the left button turned off, pressing it twice quickly can run an action of its own.
 
 If the **Short Power Button Click** setting is set to "Page Turn" or "Previous Page", a brief press of the Power button turns to the next or previous page respectively.
 
